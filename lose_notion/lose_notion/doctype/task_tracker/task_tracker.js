@@ -1,9 +1,263 @@
 frappe.ui.form.on('Task Tracker', {
     onload: function(frm) {
         frm.auto_save_timeout = null;
+        frm.active_filters = {}; // Store active filters
+        frm.original_rows = null; // Store original rows for reset
     },
     
     refresh: function(frm) {
+        // Add standalone "Filter Tasks" button (outside Actions)
+        if (!frm.is_new()) {
+            // Store original rows if not already stored
+            if (!frm.original_rows && frm.doc.task_tracker_table) {
+                frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
+            }
+            
+            // Get unique values for dropdowns
+            let rows = frm.original_rows || frm.doc.task_tracker_table || [];
+            
+            let assigned_options = [''].concat([...new Set(rows.map(r => r.assigned_to).filter(Boolean))]);
+            let status_options = ['', '⚫Not Started', '🔵In Progress', '🟢Completed', '🟠On Hold'];
+            
+            // Count active filters
+            let filter_count = Object.values(frm.active_filters || {}).filter(v => v).length;
+            let filter_btn_label = filter_count > 0 ? __(`🔍 Filter (${filter_count})`) : __('🔍 Filter');
+            
+            frm.add_custom_button(filter_btn_label, function() {
+                let d = new frappe.ui.Dialog({
+                    title: __('Filter Tasks'),
+                    fields: [
+                        {
+                            label: __('Task Name'),
+                            fieldname: 'task_name',
+                            fieldtype: 'Data',
+                            description: __('Contains text (case-insensitive)'),
+                            default: frm.active_filters?.task_name || ''
+                        },
+                        {
+                            fieldtype: 'Column Break'
+                        },
+                        {
+                            label: __('Assigned To'),
+                            fieldname: 'assigned_to',
+                            fieldtype: 'Select',
+                            options: assigned_options,
+                            default: frm.active_filters?.assigned_to || ''
+                        },
+                        {
+                            fieldtype: 'Section Break'
+                        },
+                        {
+                            label: __('Status'),
+                            fieldname: 'status',
+                            fieldtype: 'Select',
+                            options: status_options,
+                            default: frm.active_filters?.status || ''
+                        },
+                        {
+                            fieldtype: 'Column Break'
+                        },
+                        {
+                            label: __('Show Completed'),
+                            fieldname: 'hide_completed',
+                            fieldtype: 'Select',
+                            options: [
+                                { label: 'Show All', value: '' },
+                                { label: 'Hide Completed', value: 'hide' },
+                                { label: 'Only Completed', value: 'only' }
+                            ],
+                            default: frm.active_filters?.hide_completed || ''
+                        },
+                        {
+                            fieldtype: 'Section Break',
+                            label: __('Date Filters')
+                        },
+                        {
+                            label: __('Deadline From'),
+                            fieldname: 'deadline_from',
+                            fieldtype: 'Date',
+                            default: frm.active_filters?.deadline_from || ''
+                        },
+                        {
+                            fieldtype: 'Column Break'
+                        },
+                        {
+                            label: __('Deadline To'),
+                            fieldname: 'deadline_to',
+                            fieldtype: 'Date',
+                            default: frm.active_filters?.deadline_to || ''
+                        },
+                        {
+                            fieldtype: 'Section Break'
+                        },
+                        {
+                            label: __('Completed Date From'),
+                            fieldname: 'completed_from',
+                            fieldtype: 'Date',
+                            default: frm.active_filters?.completed_from || ''
+                        },
+                        {
+                            fieldtype: 'Column Break'
+                        },
+                        {
+                            label: __('Completed Date To'),
+                            fieldname: 'completed_to',
+                            fieldtype: 'Date',
+                            default: frm.active_filters?.completed_to || ''
+                        }
+                    ],
+                    primary_action_label: __('Apply Filters'),
+                    primary_action: function(values) {
+                        // Store filter values
+                        frm.active_filters = values;
+                        
+                        // Get original rows
+                        let all_rows = frm.original_rows || [];
+                        
+                        // Apply filters
+                        let filtered_rows = all_rows.filter(row => {
+                            // Task Name filter (contains, case-insensitive)
+                            if (values.task_name) {
+                                if (!row.task_name || !row.task_name.toLowerCase().includes(values.task_name.toLowerCase())) {
+                                    return false;
+                                }
+                            }
+                            
+                            // Assigned To filter
+                            if (values.assigned_to) {
+                                if (row.assigned_to !== values.assigned_to) {
+                                    return false;
+                                }
+                            }
+                            
+                            // Status filter
+                            if (values.status) {
+                                if (row.status !== values.status) {
+                                    return false;
+                                }
+                            }
+                            
+                            // Hide/Show Completed filter
+                            if (values.hide_completed === 'hide') {
+                                if (row.status === '🟢Completed') {
+                                    return false;
+                                }
+                            } else if (values.hide_completed === 'only') {
+                                if (row.status !== '🟢Completed') {
+                                    return false;
+                                }
+                            }
+                            
+                            // Deadline From filter
+                            if (values.deadline_from) {
+                                if (!row.deadline || row.deadline < values.deadline_from) {
+                                    return false;
+                                }
+                            }
+                            
+                            // Deadline To filter
+                            if (values.deadline_to) {
+                                if (!row.deadline || row.deadline > values.deadline_to) {
+                                    return false;
+                                }
+                            }
+                            
+                            // Completed Date From filter
+                            if (values.completed_from) {
+                                if (!row.completed_date || row.completed_date < values.completed_from) {
+                                    return false;
+                                }
+                            }
+                            
+                            // Completed Date To filter
+                            if (values.completed_to) {
+                                if (!row.completed_date || row.completed_date > values.completed_to) {
+                                    return false;
+                                }
+                            }
+                            
+                            return true;
+                        });
+                        
+                        // Update the table with filtered rows
+                        frm.doc.task_tracker_table = filtered_rows;
+                        frm.refresh_field('task_tracker_table');
+                        
+                        d.hide();
+                        
+                        let active_filter_count = Object.values(values).filter(v => v).length;
+                        frappe.show_alert({
+                            message: __(`Showing ${filtered_rows.length} of ${all_rows.length} tasks (${active_filter_count} filter(s) active)`),
+                            indicator: 'blue'
+                        }, 4);
+                        
+                        // Refresh to update button label
+                        frm.refresh();
+                    },
+                    secondary_action_label: __('Clear Filters'),
+                    secondary_action: function() {
+                        // Reset filters
+                        frm.active_filters = {};
+                        
+                        // Restore original rows
+                        if (frm.original_rows) {
+                            frm.doc.task_tracker_table = JSON.parse(JSON.stringify(frm.original_rows));
+                            frm.refresh_field('task_tracker_table');
+                        }
+                        
+                        d.hide();
+                        
+                        frappe.show_alert({
+                            message: __('Filters cleared - showing all tasks'),
+                            indicator: 'green'
+                        }, 3);
+                        
+                        // Refresh to update button label
+                        frm.refresh();
+                    }
+                });
+                
+                d.show();
+            });
+            
+            // Add "X" Clear Filter button if filters are active
+            if (filter_count > 0) {
+                frm.add_custom_button(__('✕'), function() {
+                    // Reset filters
+                    frm.active_filters = {};
+                    
+                    // Restore original rows
+                    if (frm.original_rows) {
+                        frm.doc.task_tracker_table = JSON.parse(JSON.stringify(frm.original_rows));
+                        frm.refresh_field('task_tracker_table');
+                    }
+                    
+                    frappe.show_alert({
+                        message: __('Filters cleared - showing all tasks'),
+                        indicator: 'green'
+                    }, 3);
+                    
+                    // Refresh to update buttons
+                    frm.refresh();
+                });
+                
+                // Style the X button to look like a clear filter button
+                setTimeout(() => {
+                    frm.$wrapper.find('.btn-secondary:contains("✕")').css({
+                        'padding': '5px 10px',
+                        'margin-left': '-8px',
+                        'border-left': 'none',
+                        'background-color': '#f8d7da',
+                        'border-color': '#f5c6cb',
+                        'color': '#721c24'
+                    }).hover(
+                        function() { $(this).css({'background-color': '#f1b0b7', 'color': '#491217'}); },
+                        function() { $(this).css({'background-color': '#f8d7da', 'color': '#721c24'}); }
+                    );
+                }, 100);
+            }
+        }
+        
         // Add "Add Multiple Tasks" button
         if (!frm.is_new()) {
             frm.add_custom_button(__('Add Multiple Tasks'), function() {
@@ -31,6 +285,15 @@ frappe.ui.form.on('Task Tracker', {
                                     task_name: values.task_name.trim(),
                                     status: '⚫Not Started'
                                 });
+                                
+                                // Also add to original_rows to keep sync
+                                if (frm.original_rows) {
+                                    frm.original_rows.push({
+                                        task_name: values.task_name.trim(),
+                                        status: '⚫Not Started'
+                                    });
+                                }
+                                
                                 tasks_added.push(values.task_name.trim());
                                 
                                 frappe.show_alert({
@@ -56,6 +319,9 @@ frappe.ui.form.on('Task Tracker', {
                                             message: __(`${tasks_added.length} task(s) added and saved!`),
                                             indicator: 'green'
                                         }, 3);
+                                        
+                                        // Update original_rows after save
+                                        frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
                                     });
                                 }
                             }
@@ -155,6 +421,14 @@ frappe.ui.form.on('Task Tracker', {
     },
     
     validate: function(frm) {
+        // Restore original rows before saving to ensure all data is saved
+        if (frm.original_rows && frm.original_rows.length > 0) {
+            // Check if we're in filtered mode (displayed rows < original rows)
+            if (frm.doc.task_tracker_table.length < frm.original_rows.length) {
+                frm.doc.task_tracker_table = JSON.parse(JSON.stringify(frm.original_rows));
+            }
+        }
+        
         // Remove rows with blank task names before saving
         let rows_to_remove = [];
         
@@ -181,15 +455,26 @@ frappe.ui.form.on('Task Tracker', {
             
             frm.refresh_field('task_tracker_table');
         }
+        
+        // Update original_rows after validation
+        frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
+    },
+    
+    after_save: function(frm) {
+        // Update original_rows after save
+        frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
+        frm.active_filters = {};
     }
 });
 
 frappe.ui.form.on('Task Tracker Table', {
     task_name: function(frm, cdt, cdn) {
+        sync_row_to_original(frm, cdt, cdn);
         trigger_auto_save(frm);
     },
     
     assigned_to: function(frm, cdt, cdn) {
+        sync_row_to_original(frm, cdt, cdn);
         trigger_auto_save(frm);
     },
     
@@ -206,10 +491,12 @@ frappe.ui.form.on('Task Tracker Table', {
             frappe.model.set_value(cdt, cdn, 'completed_date', null);
         }
         
+        sync_row_to_original(frm, cdt, cdn);
         trigger_auto_save(frm);
     },
     
     deadline: function(frm, cdt, cdn) {
+        sync_row_to_original(frm, cdt, cdn);
         trigger_auto_save(frm);
     },
     
@@ -218,8 +505,35 @@ frappe.ui.form.on('Task Tracker Table', {
         if (!row.status) {
             frappe.model.set_value(cdt, cdn, 'status', '⚫Not Started');
         }
+    },
+    
+    task_tracker_table_remove: function(frm, cdt, cdn) {
+        // Also remove from original_rows
+        if (frm.original_rows) {
+            let idx = frm.doc.task_tracker_table.findIndex(r => r.name === cdn);
+            if (idx > -1 && frm.original_rows[idx]) {
+                frm.original_rows.splice(idx, 1);
+            }
+        }
     }
 });
+
+function sync_row_to_original(frm, cdt, cdn) {
+    // Sync changes to original_rows to keep filter state in sync
+    if (frm.original_rows) {
+        let row = locals[cdt][cdn];
+        let idx = frm.doc.task_tracker_table.findIndex(r => r.name === cdn);
+        if (idx > -1 && frm.original_rows[idx]) {
+            frm.original_rows[idx] = Object.assign({}, frm.original_rows[idx], {
+                task_name: row.task_name,
+                assigned_to: row.assigned_to,
+                status: row.status,
+                deadline: row.deadline,
+                completed_date: row.completed_date
+            });
+        }
+    }
+}
 
 function trigger_auto_save(frm) {
     if (frm.auto_save_timeout) {
