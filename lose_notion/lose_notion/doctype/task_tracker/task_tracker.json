@@ -16,10 +16,11 @@
   }
  ],
  "grid_page_length": 50,
+ "hide_toolbar": 1,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-01-25 12:56:05.168710",
+ "modified": "2026-01-25 13:40:56.962336",
  "modified_by": "Administrator",
  "module": "Lose Notion",
  "name": "Task Tracker",
