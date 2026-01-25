@@ -290,7 +290,8 @@ frappe.ui.form.on('Task Tracker', {
                                 if (frm.original_rows) {
                                     frm.original_rows.push({
                                         task_name: values.task_name.trim(),
-                                        status: '⚫Not Started'
+                                        status: '⚫Not Started',
+                                        name: row.name // Store the name for syncing
                                     });
                                 }
                                 
@@ -423,9 +424,30 @@ frappe.ui.form.on('Task Tracker', {
     validate: function(frm) {
         // Restore original rows before saving to ensure all data is saved
         if (frm.original_rows && frm.original_rows.length > 0) {
-            // Check if we're in filtered mode (displayed rows < original rows)
-            if (frm.doc.task_tracker_table.length < frm.original_rows.length) {
-                frm.doc.task_tracker_table = JSON.parse(JSON.stringify(frm.original_rows));
+            // Check if we're in filtered mode by comparing with current displayed rows
+            let current_names = new Set(frm.doc.task_tracker_table.map(r => r.name));
+            let original_names = new Set(frm.original_rows.map(r => r.name));
+            
+            // If we have filters active (some original rows not in current view)
+            let has_hidden_rows = [...original_names].some(name => !current_names.has(name));
+            
+            if (has_hidden_rows) {
+                // Merge: keep updates from current rows, add back hidden rows
+                let merged_rows = [];
+                
+                // First, add rows that are currently visible (with their updates)
+                frm.doc.task_tracker_table.forEach(row => {
+                    merged_rows.push(row);
+                });
+                
+                // Then add back rows that were hidden by filter
+                frm.original_rows.forEach(orig_row => {
+                    if (!current_names.has(orig_row.name)) {
+                        merged_rows.push(orig_row);
+                    }
+                });
+                
+                frm.doc.task_tracker_table = merged_rows;
             }
         }
         
@@ -507,11 +529,11 @@ frappe.ui.form.on('Task Tracker Table', {
         }
     },
     
-    task_tracker_table_remove: function(frm, cdt, cdn) {
-        // Also remove from original_rows
+    before_task_tracker_table_remove: function(frm, cdt, cdn) {
+        // Remove from original_rows BEFORE the row is removed from the table
         if (frm.original_rows) {
-            let idx = frm.doc.task_tracker_table.findIndex(r => r.name === cdn);
-            if (idx > -1 && frm.original_rows[idx]) {
+            let idx = frm.original_rows.findIndex(r => r.name === cdn);
+            if (idx > -1) {
                 frm.original_rows.splice(idx, 1);
             }
         }
@@ -522,8 +544,8 @@ function sync_row_to_original(frm, cdt, cdn) {
     // Sync changes to original_rows to keep filter state in sync
     if (frm.original_rows) {
         let row = locals[cdt][cdn];
-        let idx = frm.doc.task_tracker_table.findIndex(r => r.name === cdn);
-        if (idx > -1 && frm.original_rows[idx]) {
+        let idx = frm.original_rows.findIndex(r => r.name === cdn);
+        if (idx > -1) {
             frm.original_rows[idx] = Object.assign({}, frm.original_rows[idx], {
                 task_name: row.task_name,
                 assigned_to: row.assigned_to,
