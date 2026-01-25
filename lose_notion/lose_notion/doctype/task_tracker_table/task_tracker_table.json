@@ -40,14 +40,15 @@
   {
    "fieldname": "completed_date",
    "fieldtype": "Date",
-   "label": "Completed Date"
+   "label": "Completed Date",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-01-25 16:45:55.059417",
+ "modified": "2026-01-25 17:48:15.532401",
  "modified_by": "Administrator",
  "module": "Lose Notion",
  "name": "Task Tracker Table",
