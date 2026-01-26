@@ -163,7 +163,6 @@ function setup_action_buttons(frm) {
     add_rapid_tasks_button(frm);
     add_archive_button(frm);
 }
-
 function add_rapid_tasks_button(frm) {
     let grid = frm.fields_dict.task_tracker_table.grid;
     if (grid.wrapper.find('.btn-rapid-tasks').length > 0) return;
@@ -189,7 +188,17 @@ function add_rapid_tasks_button(frm) {
                             frm.original_rows.push({ task_name: values.task_name.trim(), status: '⚫Not Started', name: row.name });
                         }
                         tasks_added.push(values.task_name.trim());
-                        frappe.show_alert({ message: __('Task added: ') + values.task_name.trim(), indicator: 'green' }, 2);
+                        
+                        // Refresh the field to show the new task immediately
+                        frm.refresh_field('task_tracker_table');
+                        
+                        // Save immediately after adding each task
+                        frm.save().then(() => {
+                            frappe.show_alert({ message: __('Task added: ') + values.task_name.trim(), indicator: 'green' }, 2);
+                            // Update original_rows after save
+                            frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
+                        });
+                        
                         d.hide();
                         show_dialog();
                     }
@@ -198,13 +207,7 @@ function add_rapid_tasks_button(frm) {
                 secondary_action: function () {
                     d.hide();
                     if (tasks_added.length > 0) {
-                        frm.refresh_field('task_tracker_table');
-                        if (frm.is_dirty()) {
-                            frm.save().then(() => {
-                                frappe.show_alert({ message: __(`${tasks_added.length} task(s) added and saved!`), indicator: 'green' }, 3);
-                                frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
-                            });
-                        }
+                        frappe.show_alert({ message: __(`${tasks_added.length} task(s) added successfully!`), indicator: 'green' }, 3);
                     }
                 }
             });
