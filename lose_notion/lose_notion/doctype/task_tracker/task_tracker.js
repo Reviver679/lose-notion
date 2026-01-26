@@ -162,13 +162,38 @@ function setup_action_buttons(frm) {
     if (frm.is_new()) return;
     add_rapid_tasks_button(frm);
     add_archive_button(frm);
+    add_task_history_button(frm);
 }
+
+function add_task_history_button(frm) {
+    frm.add_custom_button(__('Go to Task History'), function () {
+        frappe.set_route('List', 'Task History');
+    }, __('Actions'));
+}
+
 function add_rapid_tasks_button(frm) {
     let grid = frm.fields_dict.task_tracker_table.grid;
-    if (grid.wrapper.find('.btn-rapid-tasks').length > 0) return;
+    
+    // Remove existing button if it exists to recreate it
+    grid.wrapper.find('.btn-rapid-tasks').remove();
 
     let $btn = $(`<button class="btn btn-xs btn-secondary btn-rapid-tasks" style="margin-left: 8px;">${__('Add Rapid Tasks')}</button>`);
     grid.wrapper.find('.grid-footer .grid-add-row').after($btn);
+
+    // Function to hide the Add Row button
+    function hide_add_row() {
+        grid.wrapper.find('.grid-footer .grid-add-row').hide();
+    }
+
+    // Hide initially
+    hide_add_row();
+
+    // Override the grid's refresh method to hide Add Row button after every refresh
+    let original_refresh = grid.refresh.bind(grid);
+    grid.refresh = function() {
+        original_refresh();
+        hide_add_row();
+    };
 
     $btn.on('click', function () {
         let tasks_added = [];
@@ -180,28 +205,31 @@ function add_rapid_tasks_button(frm) {
                     label: __('Task Name'), fieldname: 'task_name', fieldtype: 'Data', reqd: 1,
                     description: tasks_added.length > 0 ? `<strong style="color: green;">✓ ${tasks_added.length} task(s) added</strong>` : ''
                 }],
-                primary_action_label: __('Add & Next'),
+                primary_action_label: __('Add Next'),
                 primary_action: function (values) {
-                    if (values.task_name?.trim()) {
-                        let row = frm.add_child('task_tracker_table', { task_name: values.task_name.trim(), status: '⚫Not Started' });
-                        if (frm.original_rows) {
-                            frm.original_rows.push({ task_name: values.task_name.trim(), status: '⚫Not Started', name: row.name });
-                        }
-                        tasks_added.push(values.task_name.trim());
-                        
-                        // Refresh the field to show the new task immediately
-                        frm.refresh_field('task_tracker_table');
-                        
-                        // Save immediately after adding each task
-                        frm.save().then(() => {
-                            frappe.show_alert({ message: __('Task added: ') + values.task_name.trim(), indicator: 'green' }, 2);
-                            // Update original_rows after save
-                            frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
-                        });
-                        
-                        d.hide();
-                        show_dialog();
+                    // Check if values exist (Frappe won't pass values if validation fails)
+                    if (!values || !values.task_name) {
+                        return;
                     }
+                    
+                    let row = frm.add_child('task_tracker_table', { task_name: values.task_name.trim(), status: '⚫Not Started' });
+                    if (frm.original_rows) {
+                        frm.original_rows.push({ task_name: values.task_name.trim(), status: '⚫Not Started', name: row.name });
+                    }
+                    tasks_added.push(values.task_name.trim());
+                    
+                    // Refresh the field to show the new task immediately
+                    frm.refresh_field('task_tracker_table');
+                    
+                    // Save immediately after adding each task
+                    frm.save().then(() => {
+                        frappe.show_alert({ message: __('Task added: ') + values.task_name.trim(), indicator: 'green' }, 2);
+                        // Update original_rows after save
+                        frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
+                    });
+                    
+                    d.hide();
+                    show_dialog();
                 },
                 secondary_action_label: __('Done'),
                 secondary_action: function () {
@@ -211,6 +239,7 @@ function add_rapid_tasks_button(frm) {
                     }
                 }
             });
+            
             d.show();
             setTimeout(() => d.fields_dict.task_name.$input.focus(), 100);
             d.fields_dict.task_name.$input.on('keypress', function (e) {
@@ -263,36 +292,33 @@ frappe.ui.form.on('Task Tracker', {
         frm.active_filters = {};
         frm.original_rows = null;
     },
-
     refresh: function (frm) {
         setup_filter_button(frm);
         setup_action_buttons(frm);
     },
-
     validate: function (frm) {
         // Restore hidden rows before saving
         if (frm.original_rows && frm.original_rows.length > 0) {
             let current_names = new Set(frm.doc.task_tracker_table.map(r => r.name));
             let has_hidden = frm.original_rows.some(r => !current_names.has(r.name));
-
             if (has_hidden) {
                 let merged = [...frm.doc.task_tracker_table];
                 frm.original_rows.forEach(r => { if (!current_names.has(r.name)) merged.push(r); });
                 frm.doc.task_tracker_table = merged;
             }
         }
-
-        // Remove blank task names
+        // Remove blank task names (silently, without showing alert during rapid task addition)
         let blanks = frm.doc.task_tracker_table.filter(r => !r.task_name?.trim());
         if (blanks.length > 0) {
-            frappe.show_alert({ message: __('Please enter a task name'), indicator: 'orange' }, 3);
             frm.doc.task_tracker_table = frm.doc.task_tracker_table.filter(r => r.task_name?.trim());
             frm.refresh_field('task_tracker_table');
+            // Only show alert if not in rapid task mode
+            if (!frm.is_rapid_task_mode) {
+                frappe.show_alert({ message: __('Blank tasks removed'), indicator: 'orange' }, 2);
+            }
         }
-
         frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
     },
-
     after_save: function (frm) {
         frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
         frm.active_filters = {};
