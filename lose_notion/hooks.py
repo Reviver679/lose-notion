@@ -26,7 +26,7 @@ app_license = "mit"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/lose_notion/css/lose_notion.css"
-# app_include_js = "/assets/lose_notion/js/lose_notion.js"
+app_include_js = "lose_notion.bundle.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/lose_notion/css/lose_notion.css"
