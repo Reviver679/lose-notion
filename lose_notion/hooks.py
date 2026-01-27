@@ -144,23 +144,13 @@ app_license = "mit"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"lose_notion.tasks.all"
-# 	],
-# 	"daily": [
-# 		"lose_notion.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"lose_notion.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"lose_notion.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"lose_notion.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+    "cron": {
+        "*/5 * * * *": [
+            "lose_notion.tasks.task_deadline_alerts.send_overdue_task_alerts"
+        ]
+    }
+}
 
 # Testing
 # -------

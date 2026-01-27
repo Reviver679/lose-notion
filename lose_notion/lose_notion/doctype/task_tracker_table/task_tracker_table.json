@@ -7,21 +7,24 @@
  "engine": "InnoDB",
  "field_order": [
   "task_name",
-  "assigned_to",
   "status",
+  "assigned_to",
   "deadline",
-  "completed_date"
+  "completed_date",
+  "last_alerted"
  ],
  "fields": [
   {
    "fieldname": "task_name",
    "fieldtype": "Data",
    "in_list_view": 1,
-   "label": "Task Name"
+   "label": "Task Name",
+   "sticky": 1
   },
   {
    "fieldname": "assigned_to",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Assigned To",
    "options": "User"
   },
@@ -29,26 +32,35 @@
    "default": "\u26abNot Started",
    "fieldname": "status",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "Status",
-   "options": "\u26abNot Started\n\ud83d\udd35In Progress\n\ud83d\udfe2Completed\n\ud83d\udfe0On Hold"
+   "options": "\u26abNot Started\n\ud83d\udd35In Progress\n\ud83d\udfe2Completed\n\ud83d\udfe0On Hold",
+   "sticky": 1
   },
   {
    "fieldname": "deadline",
    "fieldtype": "Date",
+   "in_list_view": 1,
    "label": "Deadline"
   },
   {
    "fieldname": "completed_date",
    "fieldtype": "Date",
+   "in_list_view": 1,
    "label": "Completed Date",
    "read_only": 1
+  },
+  {
+   "fieldname": "last_alerted",
+   "fieldtype": "Datetime",
+   "label": "Last Alerted"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-01-25 17:48:15.532401",
+ "modified": "2026-01-27 21:41:50.393558",
  "modified_by": "Administrator",
  "module": "Lose Notion",
  "name": "Task Tracker Table",
