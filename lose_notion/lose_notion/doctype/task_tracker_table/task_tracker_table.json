@@ -11,7 +11,9 @@
   "assigned_to",
   "deadline",
   "completed_date",
-  "last_alerted"
+  "last_alerted",
+  "assignee",
+  "created_by"
  ],
  "fields": [
   {
@@ -54,13 +56,28 @@
    "fieldname": "last_alerted",
    "fieldtype": "Datetime",
    "label": "Last Alerted"
+  },
+  {
+   "fieldname": "assignee",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Assignee",
+   "options": "User"
+  },
+  {
+   "fieldname": "created_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Created By",
+   "options": "User",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-01-27 21:41:50.393558",
+ "modified": "2026-01-28 08:12:12.237958",
  "modified_by": "Administrator",
  "module": "Lose Notion",
  "name": "Task Tracker Table",

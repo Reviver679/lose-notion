@@ -1,6 +1,6 @@
 /**
  * Task Tracker - Main Form Script
- * Well-organized with clear sections
+ * With role-based visibility filtering
  */
 
 // ============================================================================
@@ -36,28 +36,50 @@ function trigger_auto_save(frm) {
     }, 800);
 }
 
+function filter_tasks_by_role(frm) {
+    if (frm.is_new()) return;
+    
+    let roles = frappe.user_roles || [];
+    let current_user = frappe.session.user;
+    
+    // Task Admin sees all, no restrictions
+    if (roles.includes('Task Admin') || roles.includes('Administrator') || roles.includes('System Manager')) {
+        return;
+    }
+    
+    // Task User - filter visibility only
+    if (roles.includes('Task User')) {
+        let all_tasks = frm.doc.task_tracker_table || [];
+        
+        // Filter to only show tasks user created or is assigned to
+        let visible_tasks = all_tasks.filter(task => {
+            return task.created_by === current_user || task.assigned_to === current_user;
+        });
+        
+        // Store ALL tasks for restore during save
+        frm.all_tasks_backup = JSON.parse(JSON.stringify(all_tasks));
+        frm.doc.task_tracker_table = visible_tasks;
+        frm.refresh_field('task_tracker_table');
+    }
+}
+
 // ============================================================================
 // SECTION: FILTERS
 // ============================================================================
 
 function setup_filter_button(frm) {
     if (frm.is_new()) return;
-
     if (!frm.original_rows && frm.doc.task_tracker_table) {
         frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
     }
-
     let rows = frm.original_rows || frm.doc.task_tracker_table || [];
     let assigned_options = [''].concat([...new Set(rows.map(r => r.assigned_to).filter(Boolean))]);
     let status_options = ['', '⚫Not Started', '🔵In Progress', '🟢Completed', '🟠On Hold'];
-
     let filter_count = Object.values(frm.active_filters || {}).filter(v => v).length;
     let filter_btn_label = filter_count > 0 ? __(`🔍 Filter (${filter_count})`) : __('🔍 Filter');
-
     frm.add_custom_button(filter_btn_label, function () {
         show_filter_dialog(frm, assigned_options, status_options);
     });
-
     if (filter_count > 0) {
         frm.add_custom_button(__('✕'), function () {
             clear_filters(frm);
@@ -110,7 +132,6 @@ function show_filter_dialog(frm, assigned_options, status_options) {
 function apply_filters(frm, values) {
     frm.active_filters = values;
     let all_rows = frm.original_rows || [];
-
     let filtered_rows = all_rows.filter(row => {
         if (values.task_name && (!row.task_name || !row.task_name.toLowerCase().includes(values.task_name.toLowerCase()))) return false;
         if (values.assigned_to && row.assigned_to !== values.assigned_to) return false;
@@ -123,10 +144,8 @@ function apply_filters(frm, values) {
         if (values.completed_to && (!row.completed_date || row.completed_date > values.completed_to)) return false;
         return true;
     });
-
     frm.doc.task_tracker_table = filtered_rows;
     frm.refresh_field('task_tracker_table');
-
     let active_count = Object.values(values).filter(v => v).length;
     frappe.show_alert({ message: __(`Showing ${filtered_rows.length} of ${all_rows.length} tasks (${active_count} filter(s) active)`), indicator: 'blue' }, 4);
     frm.refresh();
@@ -174,30 +193,23 @@ function add_task_history_button(frm) {
 function add_rapid_tasks_button(frm) {
     let grid = frm.fields_dict.task_tracker_table.grid;
     
-    // Remove existing button if it exists to recreate it
     grid.wrapper.find('.btn-rapid-tasks').remove();
-
     let $btn = $(`<button class="btn btn-xs btn-secondary btn-rapid-tasks" style="margin-left: 8px;">${__('Add Rapid Tasks')}</button>`);
     grid.wrapper.find('.grid-footer .grid-add-row').after($btn);
-
-    // Function to hide the Add Row button
+    
     function hide_add_row() {
         grid.wrapper.find('.grid-footer .grid-add-row').hide();
     }
-
-    // Hide initially
     hide_add_row();
-
-    // Override the grid's refresh method to hide Add Row button after every refresh
+    
     let original_refresh = grid.refresh.bind(grid);
     grid.refresh = function() {
         original_refresh();
         hide_add_row();
     };
-
+    
     $btn.on('click', function () {
         let tasks_added = [];
-
         function show_dialog() {
             let d = new frappe.ui.Dialog({
                 title: __('Add Rapid Tasks'),
@@ -207,10 +219,7 @@ function add_rapid_tasks_button(frm) {
                 }],
                 primary_action_label: __('Add Next'),
                 primary_action: function (values) {
-                    // Check if values exist (Frappe won't pass values if validation fails)
-                    if (!values || !values.task_name) {
-                        return;
-                    }
+                    if (!values || !values.task_name) return;
                     
                     let row = frm.add_child('task_tracker_table', { task_name: values.task_name.trim(), status: '⚫Not Started' });
                     if (frm.original_rows) {
@@ -218,13 +227,10 @@ function add_rapid_tasks_button(frm) {
                     }
                     tasks_added.push(values.task_name.trim());
                     
-                    // Refresh the field to show the new task immediately
                     frm.refresh_field('task_tracker_table');
                     
-                    // Save immediately after adding each task
                     frm.save().then(() => {
                         frappe.show_alert({ message: __('Task added: ') + values.task_name.trim(), indicator: 'green' }, 2);
-                        // Update original_rows after save
                         frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
                     });
                     
@@ -291,13 +297,27 @@ frappe.ui.form.on('Task Tracker', {
         frm.auto_save_timeout = null;
         frm.active_filters = {};
         frm.original_rows = null;
+        frm.all_tasks_backup = null;
+        
+        // Filter visibility for Task Users
+        filter_tasks_by_role(frm);
     },
     refresh: function (frm) {
         setup_filter_button(frm);
         setup_action_buttons(frm);
     },
     validate: function (frm) {
-        // Restore hidden rows before saving
+        // Restore ALL tasks (including hidden ones from role filter) before saving
+        if (frm.all_tasks_backup && frm.all_tasks_backup.length > 0) {
+            let current_names = new Set(frm.doc.task_tracker_table.map(r => r.name));
+            frm.all_tasks_backup.forEach(task => {
+                if (!current_names.has(task.name)) {
+                    frm.doc.task_tracker_table.push(task);
+                }
+            });
+        }
+        
+        // Restore hidden rows from user filters before saving
         if (frm.original_rows && frm.original_rows.length > 0) {
             let current_names = new Set(frm.doc.task_tracker_table.map(r => r.name));
             let has_hidden = frm.original_rows.some(r => !current_names.has(r.name));
@@ -307,12 +327,12 @@ frappe.ui.form.on('Task Tracker', {
                 frm.doc.task_tracker_table = merged;
             }
         }
-        // Remove blank task names (silently, without showing alert during rapid task addition)
+        
+        // Remove blank task names
         let blanks = frm.doc.task_tracker_table.filter(r => !r.task_name?.trim());
         if (blanks.length > 0) {
             frm.doc.task_tracker_table = frm.doc.task_tracker_table.filter(r => r.task_name?.trim());
             frm.refresh_field('task_tracker_table');
-            // Only show alert if not in rapid task mode
             if (!frm.is_rapid_task_mode) {
                 frappe.show_alert({ message: __('Blank tasks removed'), indicator: 'orange' }, 2);
             }
@@ -322,6 +342,9 @@ frappe.ui.form.on('Task Tracker', {
     after_save: function (frm) {
         frm.original_rows = JSON.parse(JSON.stringify(frm.doc.task_tracker_table));
         frm.active_filters = {};
+        
+        // Re-apply role-based filtering after save
+        filter_tasks_by_role(frm);
     }
 });
 
@@ -330,10 +353,37 @@ frappe.ui.form.on('Task Tracker', {
 // ============================================================================
 
 frappe.ui.form.on('Task Tracker Table', {
+    // When row form opens, apply read-only restrictions for assigned-only tasks
+    form_render: function(frm, cdt, cdn) {
+        let row = locals[cdt][cdn];
+        let current_user = frappe.session.user;
+        let roles = frappe.user_roles || [];
+        
+        // Skip for admins
+        if (roles.includes('Task Admin') || roles.includes('Administrator') || roles.includes('System Manager')) {
+            return;
+        }
+        
+        // For Task Users: if they didn't create it, make fields read-only except status
+        if (roles.includes('Task User')) {
+            if (row.created_by && row.created_by !== current_user) {
+                let grid_row = frm.fields_dict.task_tracker_table.grid.get_row(cdn);
+                if (grid_row && grid_row.grid_form) {
+                    ['task_name', 'assigned_to', 'deadline'].forEach(fieldname => {
+                        if (grid_row.grid_form.fields_dict[fieldname]) {
+                            grid_row.grid_form.fields_dict[fieldname].df.read_only = 1;
+                            grid_row.grid_form.fields_dict[fieldname].refresh();
+                        }
+                    });
+                }
+            }
+        }
+    },
+    
     task_name: function (frm, cdt, cdn) { sync_row_to_original(frm, cdt, cdn); trigger_auto_save(frm); },
     assigned_to: function (frm, cdt, cdn) { sync_row_to_original(frm, cdt, cdn); trigger_auto_save(frm); },
     deadline: function (frm, cdt, cdn) { sync_row_to_original(frm, cdt, cdn); trigger_auto_save(frm); },
-
+    
     status: function (frm, cdt, cdn) {
         let row = locals[cdt][cdn];
         if (row.status === 'Completed' || row.status === '🟢Completed') {
@@ -344,12 +394,12 @@ frappe.ui.form.on('Task Tracker Table', {
         sync_row_to_original(frm, cdt, cdn);
         trigger_auto_save(frm);
     },
-
+    
     task_tracker_table_add: function (frm, cdt, cdn) {
         let row = locals[cdt][cdn];
         if (!row.status) frappe.model.set_value(cdt, cdn, 'status', '⚫Not Started');
     },
-
+    
     before_task_tracker_table_remove: function (frm, cdt, cdn) {
         if (frm.original_rows) {
             let idx = frm.original_rows.findIndex(r => r.name === cdn);

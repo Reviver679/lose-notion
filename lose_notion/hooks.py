@@ -146,7 +146,7 @@ app_license = "mit"
 
 scheduler_events = {
     "cron": {
-        "*/5 * * * *": [
+        "0 10,14 * * *": [  # 9 AM and 2 PM every day
             "lose_notion.tasks.task_deadline_alerts.send_overdue_task_alerts"
         ]
     }
