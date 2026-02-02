@@ -146,9 +146,15 @@ app_license = "mit"
 
 scheduler_events = {
     "cron": {
-        "0 10,14 * * *": [  # 9 AM and 2 PM every day
+        "00 10,14 * * *": [  # 9 AM and 2 PM every day
             "lose_notion.tasks.task_deadline_alerts.send_overdue_task_alerts"
         ]
+    }
+}
+
+doc_events = {
+    "WhatsApp Message": {
+        "after_insert": "lose_notion.tasks.task_deadline_alerts.handle_whatsapp_task_response"
     }
 }
 
