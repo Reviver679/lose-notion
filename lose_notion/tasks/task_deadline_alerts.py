@@ -15,6 +15,7 @@ except ImportError:
 # ============================================
 
 TASK_CREATE_TRIGGERS = ['add tasks', 'add task', 'new task', 'new tasks', 'new']
+MY_TASKS_TRIGGERS = ['my tasks', 'my task', 'my']
 
 
 # ============================================
@@ -218,8 +219,12 @@ def handle_whatsapp_task_response(doc, method=None):
     from_number = doc.get("from")
     whatsapp_account = doc.whatsapp_account
     
-    # Check for task creation triggers (text messages)
+    # Check for text message triggers
     if doc.content_type == "text":
+        # Check for "my tasks" trigger first
+        if handle_my_tasks_trigger(message, from_number, whatsapp_account):
+            return
+        # Check for task creation triggers
         if handle_task_creation_trigger(message, from_number, whatsapp_account):
             return
     
@@ -798,6 +803,9 @@ def handle_task_confirmation(action, from_number, whatsapp_account):
                 whatsapp_account
             )
             
+            # Show updated task list so user can immediately update status
+            send_my_tasks(from_number, current_user["name"], whatsapp_account)
+            
         except Exception as e:
             frappe.log_error(f"Error creating tasks: {str(e)}", "Task Creation Error")
             send_reply(from_number, "❌ Error creating tasks. Please try again.", whatsapp_account)
@@ -834,3 +842,131 @@ def handle_user_selection(user_name, from_number, whatsapp_account):
         handle_ambiguous_users(remaining_ambiguous[0], from_number, whatsapp_account, confirmed_tasks, remaining_ambiguous[1:])
     else:
         show_task_confirmation(confirmed_tasks, from_number, whatsapp_account)
+
+
+# ============================================
+# PART 4: VIEW MY TASKS
+# ============================================
+
+def is_my_tasks_trigger(message):
+    """Check if message is a 'my tasks' trigger"""
+    message_lower = message.strip().lower()
+    for trigger in MY_TASKS_TRIGGERS:
+        if message_lower == trigger:
+            return True
+    return False
+
+
+def handle_my_tasks_trigger(message, from_number, whatsapp_account):
+    """Handle 'my tasks' trigger to show user's tasks"""
+    if not is_my_tasks_trigger(message):
+        return False
+    
+    current_user = get_user_by_phone(from_number)
+    if not current_user:
+        send_reply(
+            from_number,
+            "❌ Your phone number is not linked to any user account. Please update your profile.",
+            whatsapp_account
+        )
+        return True
+    
+    send_my_tasks(from_number, current_user["name"], whatsapp_account)
+    return True
+
+
+def send_my_tasks(to_number, assigned_to, whatsapp_account):
+    """Send list of user's incomplete tasks"""
+    
+    try:
+        task_tracker = frappe.get_doc("Task Tracker", "Task Tracker")
+        today_date = getdate(today())
+        task_table = task_tracker.get("task_tracker_table") or []
+        
+        my_tasks = []
+        
+        for task in task_table:
+            # Skip completed tasks
+            if task.status == "🟢Completed":
+                continue
+            
+            # Only tasks assigned to this user
+            if task.assigned_to != assigned_to:
+                continue
+            
+            # Calculate days info
+            if task.deadline:
+                deadline = getdate(task.deadline)
+                days_diff = date_diff(deadline, today_date)
+                
+                if days_diff < 0:
+                    days_text = f"{abs(days_diff)} day{'s' if abs(days_diff) > 1 else ''} overdue"
+                elif days_diff == 0:
+                    days_text = "Due today"
+                elif days_diff == 1:
+                    days_text = "Due tomorrow"
+                else:
+                    days_text = f"Due in {days_diff} days"
+            else:
+                days_text = "No deadline"
+            
+            my_tasks.append({
+                "task_name": task.name,
+                "task_title": task.task_name,
+                "days_text": days_text,
+                "status": task.status,
+                "deadline": task.deadline
+            })
+        
+        if not my_tasks:
+            send_reply(to_number, "✅ You have no pending tasks! Great job! 🎉", whatsapp_account)
+            return
+        
+        # Sort: overdue first, then by deadline
+        def sort_key(t):
+            if not t["deadline"]:
+                return (1, "9999-99-99")  # No deadline goes to end
+            deadline = getdate(t["deadline"])
+            is_overdue = deadline < today_date
+            return (0 if is_overdue else 1, str(deadline))
+        
+        my_tasks.sort(key=sort_key)
+        
+        # Build message
+        buttons = []
+        task_list_text = ""
+        
+        for idx, task in enumerate(my_tasks, 1):
+            status_emoji = get_status_emoji(task["status"])
+            task_list_text += f"{idx}. {task['task_title']} ({task['days_text']}) {status_emoji}\n"
+            
+            buttons.append({
+                "id": f"SELECT_TASK:{task['task_name']}",
+                "title": task["task_title"][:20],
+                "description": task["days_text"][:72]
+            })
+        
+        total_tasks = len(my_tasks)
+        header = f"📋 *Your {total_tasks} pending task{'s' if total_tasks > 1 else ''}*"
+        
+        message_body = (
+            f"{header}\n\n"
+            f"{task_list_text}\n"
+            f"Select a task to update its status."
+        )
+        
+        wa_msg = frappe.get_doc({
+            "doctype": "WhatsApp Message",
+            "type": "Outgoing",
+            "to": to_number,
+            "message": message_body,
+            "content_type": "interactive",
+            "buttons": json.dumps(buttons),
+            "whatsapp_account": whatsapp_account
+        })
+        wa_msg.insert(ignore_permissions=True)
+        frappe.db.commit()
+        
+    except Exception as e:
+        frappe.log_error(f"Error sending my tasks: {str(e)}", "Task Alert Error")
+        send_reply(to_number, "❌ An error occurred. Please try again.", whatsapp_account)
