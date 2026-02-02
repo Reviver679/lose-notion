@@ -1,6 +1,7 @@
 import frappe
 from frappe.utils import getdate, today, date_diff, now_datetime, add_days
 import json
+import requests
 
 # Try to import dateparser, fallback to basic parsing if not available
 try:
@@ -16,6 +17,17 @@ except ImportError:
 
 TASK_CREATE_TRIGGERS = ['add tasks', 'add task', 'new task', 'new tasks', 'new']
 MY_TASKS_TRIGGERS = ['my tasks', 'my task', 'my']
+MENU_TRIGGERS = ['menu', 'help', 'start']
+
+# Status filter triggers: text -> DB status value
+STATUS_FILTER_TRIGGERS = {
+    'not started': 'Not Started',
+    'in progress': 'In Progress',
+    'on hold': 'On Hold'
+}
+
+# Maximum buttons WhatsApp allows in a list
+MAX_WHATSAPP_LIST_ITEMS = 10
 
 # Status mapping: DB value -> Display with emoji
 STATUS_DISPLAY = {
@@ -48,9 +60,64 @@ def get_status_display(status):
     return STATUS_DISPLAY.get(status, status)
 
 
-def send_reply(to_number, message, whatsapp_account):
-    """Send a text reply message"""
+def get_whatsapp_api_credentials(whatsapp_account):
+    """Get WhatsApp API credentials from account doctype"""
     try:
+        account = frappe.get_doc("WhatsApp Account", whatsapp_account)
+        return {
+            "access_token": account.get_password("token") if hasattr(account, 'token') else account.token,
+            "phone_number_id": account.phone_id,
+            "api_url": f"https://graph.facebook.com/v18.0/{account.phone_id}/messages"
+        }
+    except Exception:
+        return None
+
+
+def mark_as_read(message_id, whatsapp_account):
+    """Mark incoming message as read (blue ticks) via WhatsApp Cloud API"""
+    if not message_id:
+        return
+    
+    try:
+        creds = get_whatsapp_api_credentials(whatsapp_account)
+        if not creds:
+            return
+        
+        headers = {
+            "Authorization": f"Bearer {creds['access_token']}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id
+        }
+        
+        requests.post(creds['api_url'], headers=headers, json=payload, timeout=5)
+    except Exception as e:
+        frappe.log_error(f"Failed to mark as read: {str(e)}", "WhatsApp API Error")
+
+
+def send_typing_indicator(to_number, whatsapp_account):
+    """Show typing indicator to user via WhatsApp Cloud API
+    
+    NOTE: The typing indicator API is not yet working. 
+    This is a placeholder for future implementation when the correct
+    API format is confirmed with your WhatsApp Business setup.
+    """
+    # TODO: Implement typing indicator when API format is confirmed
+    # The WhatsApp Cloud API typing indicator requires specific setup
+    # and the payload format may vary based on API version
+    pass
+
+
+def send_reply(to_number, message, whatsapp_account):
+    """Send a text reply message with typing indicator"""
+    try:
+        # Show typing indicator before sending
+        send_typing_indicator(to_number, whatsapp_account)
+        
         wa_msg = frappe.get_doc({
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
@@ -224,17 +291,51 @@ def handle_whatsapp_task_response(doc, method=None):
     from_number = doc.get("from")
     whatsapp_account = doc.whatsapp_account
     
+    # Mark message as read (blue ticks)
+    message_id = doc.get("message_id") or doc.get("id")
+    mark_as_read(message_id, whatsapp_account)
+    
     # Check for text message triggers
     if doc.content_type == "text":
-        # Check for "my tasks" trigger first
+        # Check for menu trigger first
+        if handle_menu_trigger(message, from_number, whatsapp_account):
+            return
+        
+        # Check for status filter triggers (not started, in progress, on hold)
+        if handle_status_filter_trigger(message, from_number, whatsapp_account):
+            return
+        
+        # Check for number selection (for large lists > 10 items)
+        if handle_number_selection(message, from_number, whatsapp_account):
+            return
+        
+        # Check for pending task creation mode (from menu button)
+        if handle_pending_task_input(message, from_number, whatsapp_account):
+            return
+        
+        # Check for "my tasks" trigger
         if handle_my_tasks_trigger(message, from_number, whatsapp_account):
             return
+        
         # Check for task creation triggers
         if handle_task_creation_trigger(message, from_number, whatsapp_account):
             return
     
     # Handle button/list replies
     if doc.content_type != "button":
+        return
+    
+    # Menu button responses
+    if message == "MENU_ADD_TASK":
+        handle_menu_add_task(from_number, whatsapp_account)
+        return
+    
+    if message == "MENU_MY_TASKS":
+        current_user = get_user_by_phone(from_number)
+        if current_user:
+            send_my_tasks(from_number, current_user["name"], whatsapp_account)
+        else:
+            send_reply(from_number, "❌ Your phone number is not linked to any user account.", whatsapp_account)
         return
     
     # Task status update flow
@@ -266,6 +367,350 @@ def handle_whatsapp_task_response(doc, method=None):
         handle_user_selection(user_name, from_number, whatsapp_account)
         return
 
+
+# ============================================
+# PART 2A: MENU AND NEW HANDLERS
+# ============================================
+
+def handle_menu_trigger(message, from_number, whatsapp_account):
+    """Handle menu/help/start trigger to show main menu buttons"""
+    if message.strip().lower() not in MENU_TRIGGERS:
+        return False
+    
+    send_typing_indicator(from_number, whatsapp_account)
+    
+    buttons = [
+        {"id": "MENU_ADD_TASK", "title": "➕ Add Tasks"},
+        {"id": "MENU_MY_TASKS", "title": "📋 My Tasks"}
+    ]
+    
+    message_body = (
+        "👋 *Welcome to Task Manager*\n\n"
+        "What would you like to do?\n\n"
+        "You can also type:\n"
+        "• `my tasks` - View your tasks\n"
+        "• `add tasks` - Create new tasks\n"
+        "• `not started` / `in progress` / `on hold` - Filter by status"
+    )
+    
+    wa_msg = frappe.get_doc({
+        "doctype": "WhatsApp Message",
+        "type": "Outgoing",
+        "to": from_number,
+        "message": message_body,
+        "content_type": "interactive",
+        "buttons": json.dumps(buttons),
+        "whatsapp_account": whatsapp_account
+    })
+    wa_msg.insert(ignore_permissions=True)
+    frappe.db.commit()
+    
+    return True
+
+
+def handle_menu_add_task(from_number, whatsapp_account):
+    """Handle Add Task button from menu - enter task creation mode"""
+    current_user = get_user_by_phone(from_number)
+    if not current_user:
+        send_reply(
+            from_number,
+            "❌ Your phone number is not linked to any user account. Please update your profile.",
+            whatsapp_account
+        )
+        return
+    
+    # Set task creation mode in cache
+    cache_key = f"task_creation_mode:{from_number}"
+    frappe.cache().set_value(cache_key, "active", expires_in_sec=300)
+    
+    message = (
+        "📝 *Task Creation Mode*\n\n"
+        "Send your tasks, one per line:\n"
+        "`task name | deadline | @assignee`\n\n"
+        "*Example:*\n"
+        "```\n"
+        "Fix login bug\n"
+        "Update dashboard | tomorrow\n"
+        "Review PR | Feb 10 | @john\n"
+        "```\n\n"
+        "📅 Deadline & 👤 assignee are optional.\n"
+        "Type `cancel` to exit."
+    )
+    send_reply(from_number, message, whatsapp_account)
+
+
+def handle_pending_task_input(message, from_number, whatsapp_account):
+    """Handle task input when in task creation mode (from menu)"""
+    cache_key = f"task_creation_mode:{from_number}"
+    mode = frappe.cache().get_value(cache_key)
+    
+    if not mode:
+        return False
+    
+    # Check for cancel
+    if message.strip().lower() == 'cancel':
+        frappe.cache().delete_value(cache_key)
+        send_reply(from_number, "❌ Task creation cancelled.", whatsapp_account)
+        return True
+    
+    # Clear the mode
+    frappe.cache().delete_value(cache_key)
+    
+    # Process as task creation (parse the lines directly)
+    current_user = get_user_by_phone(from_number)
+    if not current_user:
+        send_reply(
+            from_number,
+            "❌ Your phone number is not linked to any user account.",
+            whatsapp_account
+        )
+        return True
+    
+    # Parse task lines
+    lines = [line.strip() for line in message.split('\n') if line.strip()]
+    if not lines:
+        send_reply(from_number, "❌ No tasks provided. Please try again.", whatsapp_account)
+        return True
+    
+    parsed_tasks = []
+    needs_user_confirmation = []
+    
+    for line in lines:
+        parsed = parse_task_line(line)
+        
+        if not parsed["task_name"]:
+            continue
+        
+        deadline = parse_date(parsed["deadline_str"])
+        
+        if parsed["assignee_str"]:
+            matches = fuzzy_search_user(parsed["assignee_str"])
+            if len(matches) == 1:
+                assignee = matches[0]["name"]
+                assignee_display = matches[0]["full_name"] or matches[0]["email"]
+            elif len(matches) > 1:
+                needs_user_confirmation.append({
+                    "task_name": parsed["task_name"],
+                    "deadline": deadline,
+                    "search_term": parsed["assignee_str"],
+                    "matches": matches
+                })
+                continue
+            else:
+                needs_user_confirmation.append({
+                    "task_name": parsed["task_name"],
+                    "deadline": deadline,
+                    "search_term": parsed["assignee_str"],
+                    "matches": []
+                })
+                continue
+        else:
+            assignee = current_user["name"]
+            assignee_display = current_user["full_name"] or current_user["email"]
+        
+        parsed_tasks.append({
+            "task_name": parsed["task_name"],
+            "deadline": deadline,
+            "assignee": assignee,
+            "assignee_display": assignee_display
+        })
+    
+    if needs_user_confirmation:
+        handle_ambiguous_users(needs_user_confirmation[0], from_number, whatsapp_account, parsed_tasks, needs_user_confirmation[1:])
+        return True
+    
+    if parsed_tasks:
+        show_task_confirmation(parsed_tasks, from_number, whatsapp_account)
+    else:
+        send_reply(from_number, "❌ No valid tasks found. Please try again.", whatsapp_account)
+    
+    return True
+
+
+def handle_status_filter_trigger(message, from_number, whatsapp_account):
+    """Handle status filter triggers like 'not started', 'in progress', 'on hold'"""
+    message_lower = message.strip().lower()
+    
+    if message_lower not in STATUS_FILTER_TRIGGERS:
+        return False
+    
+    status = STATUS_FILTER_TRIGGERS[message_lower]
+    
+    current_user = get_user_by_phone(from_number)
+    if not current_user:
+        send_reply(
+            from_number,
+            "❌ Your phone number is not linked to any user account.",
+            whatsapp_account
+        )
+        return True
+    
+    send_filtered_tasks(from_number, current_user["name"], status, whatsapp_account)
+    return True
+
+
+def send_filtered_tasks(to_number, assigned_to, status, whatsapp_account):
+    """Send tasks filtered by status"""
+    send_typing_indicator(to_number, whatsapp_account)
+    
+    try:
+        today_date = getdate(today())
+        
+        tasks = frappe.get_all(
+            "Sprint Board",
+            filters={
+                "status": status,
+                "assigned_to": assigned_to
+            },
+            fields=["name", "task_name", "deadline", "status"]
+        )
+        
+        if not tasks:
+            send_reply(
+                to_number,
+                f"✅ No tasks with status *{get_status_display(status)}*",
+                whatsapp_account
+            )
+            return
+        
+        task_list = []
+        for task in tasks:
+            if task.deadline:
+                deadline = getdate(task.deadline)
+                days_diff = date_diff(deadline, today_date)
+                
+                if days_diff < 0:
+                    days_text = f"{abs(days_diff)} day{'s' if abs(days_diff) > 1 else ''} overdue"
+                elif days_diff == 0:
+                    days_text = "Due today"
+                elif days_diff == 1:
+                    days_text = "Due tomorrow"
+                else:
+                    days_text = f"Due in {days_diff} days"
+            else:
+                days_text = "No deadline"
+            
+            task_list.append({
+                "task_id": task.name,
+                "task_title": task.task_name,
+                "days_text": days_text,
+                "status": task.status,
+                "deadline": task.deadline
+            })
+        
+        # Sort by deadline
+        def sort_key(t):
+            if not t["deadline"]:
+                return "9999-99-99"
+            return str(getdate(t["deadline"]))
+        
+        task_list.sort(key=sort_key)
+        
+        # Send with number selection support if > 10 items
+        send_task_list_with_numbers(to_number, task_list, whatsapp_account, f"Tasks - {get_status_display(status)}")
+        
+    except Exception as e:
+        frappe.log_error(f"Error sending filtered tasks: {str(e)}", "Task Alert Error")
+        send_reply(to_number, "❌ An error occurred. Please try again.", whatsapp_account)
+
+
+def handle_number_selection(message, from_number, whatsapp_account):
+    """Handle number input to select task from cached list (for lists > 10 items)"""
+    if not message.strip().isdigit():
+        return False
+    
+    task_number = int(message.strip())
+    if task_number < 1:
+        return False
+    
+    cache_key = f"task_list:{from_number}"
+    cached_data = frappe.cache().get_value(cache_key)
+    
+    if not cached_data:
+        return False
+    
+    try:
+        task_list = json.loads(cached_data)
+        task_index = task_number - 1  # Convert to 0-indexed
+        
+        if 0 <= task_index < len(task_list):
+            task_id = task_list[task_index]["task_id"]
+            handle_task_selection(task_id, from_number, whatsapp_account)
+            return True
+        else:
+            send_reply(
+                from_number,
+                f"❌ Invalid number. Please enter a number between 1 and {len(task_list)}.",
+                whatsapp_account
+            )
+            return True
+    except Exception:
+        return False
+
+
+def send_task_list_with_numbers(to_number, task_list, whatsapp_account, header_text="Your Tasks"):
+    """Send task list with support for > 10 items via number input"""
+    if not task_list:
+        send_reply(to_number, "✅ No tasks found!", whatsapp_account)
+        return
+    
+    send_typing_indicator(to_number, whatsapp_account)
+    
+    total_tasks = len(task_list)
+    
+    # Cache the task list for number selection (convert dates to strings)
+    cache_key = f"task_list:{to_number}"
+    serializable_list = []
+    for task in task_list:
+        serializable_list.append({
+            "task_id": task["task_id"],
+            "task_title": task["task_title"],
+            "days_text": task["days_text"],
+            "status": task["status"],
+            "deadline": str(task["deadline"]) if task.get("deadline") else None
+        })
+    frappe.cache().set_value(cache_key, json.dumps(serializable_list), expires_in_sec=600)
+    
+    # Build task list text
+    task_list_text = ""
+    buttons = []
+    
+    for idx, task in enumerate(task_list, 1):
+        status_emoji = get_status_emoji(task["status"])
+        task_list_text += f"{idx}. {task['task_title']} ({task['days_text']}) {status_emoji}\n"
+        
+        # Only add first 10 as buttons (WhatsApp limit)
+        if idx <= MAX_WHATSAPP_LIST_ITEMS:
+            buttons.append({
+                "id": f"SELECT_TASK:{task['task_id']}",
+                "title": task["task_title"][:20],
+                "description": task["days_text"][:72]
+            })
+    
+    message_body = f"📋 *{header_text}* ({total_tasks} task{'s' if total_tasks > 1 else ''})\n\n{task_list_text}\n"
+    
+    # Add instruction for number selection if > 10 items
+    if total_tasks > MAX_WHATSAPP_LIST_ITEMS:
+        message_body += f"💡 *Type a number (1-{total_tasks}) to select a task*"
+    else:
+        message_body += "Select a task to update its status."
+    
+    wa_msg = frappe.get_doc({
+        "doctype": "WhatsApp Message",
+        "type": "Outgoing",
+        "to": to_number,
+        "message": message_body,
+        "content_type": "interactive",
+        "buttons": json.dumps(buttons),
+        "whatsapp_account": whatsapp_account
+    })
+    wa_msg.insert(ignore_permissions=True)
+    frappe.db.commit()
+
+
+# ============================================
+# PART 2B: TASK SELECTION AND STATUS UPDATE
+# ============================================
 
 def handle_task_selection(task_id, from_number, whatsapp_account):
     """When user selects a task, show status options (excluding current status)"""
@@ -934,40 +1379,8 @@ def send_my_tasks(to_number, assigned_to, whatsapp_account):
         
         my_tasks.sort(key=sort_key)
         
-        # Build message
-        buttons = []
-        task_list_text = ""
-        
-        for idx, task in enumerate(my_tasks, 1):
-            status_emoji = get_status_emoji(task["status"])
-            task_list_text += f"{idx}. {task['task_title']} ({task['days_text']}) {status_emoji}\n"
-            
-            buttons.append({
-                "id": f"SELECT_TASK:{task['task_id']}",
-                "title": task["task_title"][:20],
-                "description": task["days_text"][:72]
-            })
-        
-        total_tasks = len(my_tasks)
-        header = f"📋 *Your {total_tasks} pending task{'s' if total_tasks > 1 else ''}*"
-        
-        message_body = (
-            f"{header}\n\n"
-            f"{task_list_text}\n"
-            f"Select a task to update its status."
-        )
-        
-        wa_msg = frappe.get_doc({
-            "doctype": "WhatsApp Message",
-            "type": "Outgoing",
-            "to": to_number,
-            "message": message_body,
-            "content_type": "interactive",
-            "buttons": json.dumps(buttons),
-            "whatsapp_account": whatsapp_account
-        })
-        wa_msg.insert(ignore_permissions=True)
-        frappe.db.commit()
+        # Use the new function that supports > 10 items with number selection
+        send_task_list_with_numbers(to_number, my_tasks, whatsapp_account, "Your Pending Tasks")
         
     except Exception as e:
         frappe.log_error(f"Error sending my tasks: {str(e)}", "Task Alert Error")
