@@ -1,0 +1,45 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-02-02 16:05:48.279820",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "sync_with_issue_in_erpnext"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "sync_with_issue_in_erpnext",
+   "fieldtype": "Check",
+   "label": "Sync with Issue in ERPNext"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-02-02 16:07:07.036140",
+ "modified_by": "Administrator",
+ "module": "Lose Notion",
+ "name": "Lose Notion Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
