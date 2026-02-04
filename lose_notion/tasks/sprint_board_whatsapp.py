@@ -15,6 +15,8 @@ from .handlers.task_handlers import (
     handle_task_selection,
     handle_status_update,
     handle_number_selection,
+    handle_more_command,
+    handle_load_more_button,
     send_task_list,
     send_my_tasks,
     get_status_emoji
@@ -173,6 +175,10 @@ def _handle_text_message(message, from_number, whatsapp_account):
     if handle_deadline_input(message, from_number, whatsapp_account):
         return
     
+    # Check for "more" command to load more tasks
+    if handle_more_command(message, from_number, whatsapp_account):
+        return
+    
     # Check for number selection (for large lists > 10 items)
     if handle_number_selection(message, from_number, whatsapp_account):
         return
@@ -210,6 +216,11 @@ def _handle_button_message(message, from_number, whatsapp_account):
     if message.startswith("SELECT_TASK:"):
         task_id = message.replace("SELECT_TASK:", "").strip()
         handle_task_selection(task_id, from_number, whatsapp_account)
+        return
+    
+    # Load More button for task pagination
+    if message == "LOAD_MORE_TASKS":
+        handle_load_more_button(from_number, whatsapp_account)
         return
     
     if message.startswith("STATUS:"):
