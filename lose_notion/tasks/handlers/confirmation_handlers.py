@@ -8,6 +8,7 @@ import json
 from ..whatsapp_utils import send_reply, send_interactive_message
 from ..date_utils import format_date_display, parse_date
 from ..user_utils import get_user_by_phone
+from ..context_storage import get_context_data, set_context, clear_context
 from .task_handlers import send_my_tasks
 
 
@@ -21,8 +22,6 @@ def show_task_confirmation(tasks, from_number, whatsapp_account, show_add_anothe
         show_add_another: If True, shows "Add Another" button (for guided flow)
     """
     
-    cache_key = f"pending_tasks:{from_number}"
-    
     serializable_tasks = []
     for task in tasks:
         serializable_tasks.append({
@@ -32,7 +31,8 @@ def show_task_confirmation(tasks, from_number, whatsapp_account, show_add_anothe
             "assignee_display": task["assignee_display"]
         })
     
-    frappe.cache().set_value(cache_key, json.dumps(serializable_tasks), expires_in_sec=300)
+    # Store in database instead of cache
+    set_context(from_number, "pending_tasks", serializable_tasks)
     
     task_list = ""
     for idx, task in enumerate(tasks, 1):
@@ -67,17 +67,14 @@ def show_task_confirmation(tasks, from_number, whatsapp_account, show_add_anothe
 def handle_task_confirmation(action, from_number, whatsapp_account):
     """Handle confirm/cancel task creation"""
     
-    cache_key = f"pending_tasks:{from_number}"
-    pending_data = frappe.cache().get_value(cache_key)
+    tasks = get_context_data(from_number, "pending_tasks")
     
-    if not pending_data:
+    if not tasks:
         send_reply(from_number, "❌ No pending tasks found. Please start again.", whatsapp_account)
         return
     
-    tasks = json.loads(pending_data)
-    
     if action == "CANCEL_TASKS":
-        frappe.cache().delete_value(cache_key)
+        clear_context(from_number)
         send_reply(from_number, "❌ Task creation cancelled.", whatsapp_account)
         return
     
@@ -105,7 +102,7 @@ def handle_task_confirmation(action, from_number, whatsapp_account):
             
             frappe.db.commit()
             
-            frappe.cache().delete_value(cache_key)
+            clear_context(from_number)
             
             task_list = ""
             for idx, task in enumerate(tasks, 1):
@@ -150,14 +147,11 @@ def handle_add_another_task(from_number, whatsapp_account):
 def handle_change_deadline(from_number, whatsapp_account):
     """Handle 'Change Deadline' button - show numbered list for selection"""
     
-    cache_key = f"pending_tasks:{from_number}"
-    pending_data = frappe.cache().get_value(cache_key)
+    tasks = get_context_data(from_number, "pending_tasks")
     
-    if not pending_data:
+    if not tasks:
         send_reply(from_number, "❌ No pending tasks found. Please start again.", whatsapp_account)
         return
-    
-    tasks = json.loads(pending_data)
     
     if len(tasks) == 1:
         # Only one task, go directly to deadline input
@@ -165,7 +159,8 @@ def handle_change_deadline(from_number, whatsapp_account):
         return
     
     # Multiple tasks - ask which one to edit
-    frappe.cache().set_value(f"deadline_edit_mode:{from_number}", "selecting", expires_in_sec=300)
+    # Store deadline edit state with tasks
+    set_context(from_number, "deadline_edit", {"mode": "selecting", "tasks": tasks})
     
     task_list = ""
     for idx, task in enumerate(tasks, 1):
@@ -188,24 +183,21 @@ def handle_deadline_number_selection(message, from_number, whatsapp_account):
     """Handle number input for deadline task selection"""
     
     # Check if in deadline edit selection mode
-    mode = frappe.cache().get_value(f"deadline_edit_mode:{from_number}")
-    if mode != "selecting":
+    context_data = get_context_data(from_number, "deadline_edit")
+    if not context_data or context_data.get("mode") != "selecting":
         return False
     
     if not message.strip().isdigit():
         return False
     
     task_number = int(message.strip())
+    tasks = context_data.get("tasks", [])
     
-    cache_key = f"pending_tasks:{from_number}"
-    pending_data = frappe.cache().get_value(cache_key)
-    
-    if not pending_data:
-        frappe.cache().delete_value(f"deadline_edit_mode:{from_number}")
+    if not tasks:
+        clear_context(from_number)
         send_reply(from_number, "❌ Session expired. Please start again.", whatsapp_account)
         return True
     
-    tasks = json.loads(pending_data)
     task_index = task_number - 1
     
     if task_index < 0 or task_index >= len(tasks):
@@ -224,9 +216,12 @@ def _start_deadline_edit(from_number, task_index, tasks, whatsapp_account):
     """Start deadline edit for a specific task"""
     task = tasks[task_index]
     
-    # Store the index being edited
-    frappe.cache().set_value(f"deadline_edit_mode:{from_number}", "editing", expires_in_sec=300)
-    frappe.cache().set_value(f"deadline_edit_index:{from_number}", task_index, expires_in_sec=300)
+    # Store the index being edited with tasks
+    set_context(from_number, "deadline_edit", {
+        "mode": "editing",
+        "index": task_index,
+        "tasks": tasks
+    })
     
     buttons = [
         {"id": "DEADLINE_TODAY", "title": "📅 Today"},
@@ -258,25 +253,17 @@ def handle_deadline_button(deadline_type, from_number, whatsapp_account):
 def handle_deadline_input(message, from_number, whatsapp_account):
     """Handle new deadline input"""
     
-    mode = frappe.cache().get_value(f"deadline_edit_mode:{from_number}")
-    if mode != "editing":
+    context_data = get_context_data(from_number, "deadline_edit")
+    if not context_data or context_data.get("mode") != "editing":
         return False
     
-    task_index = frappe.cache().get_value(f"deadline_edit_index:{from_number}")
-    if task_index is None:
-        frappe.cache().delete_value(f"deadline_edit_mode:{from_number}")
+    task_index = context_data.get("index")
+    tasks = context_data.get("tasks", [])
+    
+    if task_index is None or not tasks:
+        clear_context(from_number)
         send_reply(from_number, "❌ Session expired. Please start again.", whatsapp_account)
         return True
-    
-    cache_key = f"pending_tasks:{from_number}"
-    pending_data = frappe.cache().get_value(cache_key)
-    
-    if not pending_data:
-        _clear_deadline_edit_cache(from_number)
-        send_reply(from_number, "❌ Session expired. Please start again.", whatsapp_account)
-        return True
-    
-    tasks = json.loads(pending_data)
     
     # Parse new deadline
     new_deadline = parse_date(message)
@@ -285,11 +272,8 @@ def handle_deadline_input(message, from_number, whatsapp_account):
     # Update the task
     tasks[task_index]["deadline"] = str(new_deadline)
     
-    # Save updated tasks
-    frappe.cache().set_value(cache_key, json.dumps(tasks), expires_in_sec=300)
-    
-    # Clear edit mode
-    _clear_deadline_edit_cache(from_number)
+    # Save updated tasks back to pending_tasks context
+    set_context(from_number, "pending_tasks", tasks)
     
     send_reply(
         from_number,
@@ -312,12 +296,6 @@ def handle_deadline_input(message, from_number, whatsapp_account):
     return True
 
 
-def _clear_deadline_edit_cache(from_number):
-    """Clear deadline edit cache"""
-    frappe.cache().delete_value(f"deadline_edit_mode:{from_number}")
-    frappe.cache().delete_value(f"deadline_edit_index:{from_number}")
-
-
 # ============================================
 # AMBIGUOUS USER HANDLERS
 # ============================================
@@ -338,7 +316,6 @@ def handle_ambiguous_users(task_info, from_number, whatsapp_account, confirmed_t
         )
         return
     
-    cache_key = f"pending_task_assign:{from_number}"
     pending_data = {
         "task_info": {
             "task_name": task_info["task_name"],
@@ -349,7 +326,7 @@ def handle_ambiguous_users(task_info, from_number, whatsapp_account, confirmed_t
         "confirmed_tasks": confirmed_tasks,
         "remaining_ambiguous": remaining_ambiguous
     }
-    frappe.cache().set_value(cache_key, json.dumps(pending_data, default=str), expires_in_sec=300)
+    set_context(from_number, "pending_task_assign", pending_data)
     
     buttons = []
     for match in matches[:3]:
@@ -371,14 +348,12 @@ def handle_ambiguous_users(task_info, from_number, whatsapp_account, confirmed_t
 def handle_user_selection(user_name, from_number, whatsapp_account):
     """Handle user selection for ambiguous assignee"""
     
-    cache_key = f"pending_task_assign:{from_number}"
-    pending_data = frappe.cache().get_value(cache_key)
+    data = get_context_data(from_number, "pending_task_assign")
     
-    if not pending_data:
+    if not data:
         send_reply(from_number, "❌ Session expired. Please start again.", whatsapp_account)
         return
     
-    data = json.loads(pending_data)
     task_info = data["task_info"]
     confirmed_tasks = data["confirmed_tasks"]
     remaining_ambiguous = data["remaining_ambiguous"]
@@ -393,7 +368,7 @@ def handle_user_selection(user_name, from_number, whatsapp_account):
         "assignee_display": assignee_display
     })
     
-    frappe.cache().delete_value(cache_key)
+    clear_context(from_number)
     
     if remaining_ambiguous:
         handle_ambiguous_users(remaining_ambiguous[0], from_number, whatsapp_account, confirmed_tasks, remaining_ambiguous[1:])

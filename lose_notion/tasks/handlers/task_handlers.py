@@ -7,6 +7,7 @@ import json
 
 from ..whatsapp_utils import send_reply, send_typing_indicator, send_interactive_message
 from ..date_utils import get_days_text
+from ..context_storage import get_context_data, set_context
 
 # Constants
 MAX_WHATSAPP_LIST_ITEMS = 10
@@ -224,7 +225,7 @@ def send_my_tasks(to_number, assigned_to, whatsapp_account):
 
 
 def handle_number_selection(message, from_number, whatsapp_account):
-    """Handle number input to select task from cached list (for lists > 10 items)"""
+    """Handle number input to select task from list (for lists > 10 items)"""
     if not message.strip().isdigit():
         return False
     
@@ -232,14 +233,13 @@ def handle_number_selection(message, from_number, whatsapp_account):
     if task_number < 1:
         return False
     
-    cache_key = f"task_list:{from_number}"
-    cached_data = frappe.cache().get_value(cache_key)
+    # Get task list from database context
+    task_list = get_context_data(from_number, "task_list")
     
-    if not cached_data:
+    if not task_list:
         return False
     
     try:
-        task_list = json.loads(cached_data)
         task_index = task_number - 1  # Convert to 0-indexed
         
         if 0 <= task_index < len(task_list):
@@ -267,8 +267,7 @@ def send_task_list_with_numbers(to_number, task_list, whatsapp_account, header_t
     
     total_tasks = len(task_list)
     
-    # Cache the task list for number selection
-    cache_key = f"task_list:{to_number}"
+    # Store the task list in database for number selection
     serializable_list = []
     for task in task_list:
         serializable_list.append({
@@ -278,7 +277,7 @@ def send_task_list_with_numbers(to_number, task_list, whatsapp_account, header_t
             "status": task["status"],
             "deadline": str(task["deadline"]) if task.get("deadline") else None
         })
-    frappe.cache().set_value(cache_key, json.dumps(serializable_list), expires_in_sec=600)
+    set_context(to_number, "task_list", serializable_list)
     
     # Build task list text
     task_list_text = ""

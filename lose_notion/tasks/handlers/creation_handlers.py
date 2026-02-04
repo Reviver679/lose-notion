@@ -2,22 +2,18 @@
 # Handles both text-based task creation and step-by-step guided flow
 
 import frappe
-from frappe.utils import now_datetime
+from frappe.utils import now_datetime, getdate
 import json
 
 from ..whatsapp_utils import send_reply, send_interactive_message
 from ..date_utils import parse_date, format_date_display
 from ..user_utils import get_user_by_phone, fuzzy_search_user
+from ..context_storage import get_context_data, set_context, clear_context, has_context
 from .confirmation_handlers import show_task_confirmation, handle_ambiguous_users
 
 # Constants
 TASK_CREATE_TRIGGERS = ['add tasks', 'add task', 'new task', 'new tasks', 'new']
 MY_TASKS_TRIGGERS = ['my tasks', 'my task', 'my']
-
-# Cache key prefixes for guided flow
-GUIDED_FLOW_STEP = "guided_flow_step"
-GUIDED_FLOW_TASKS = "guided_flow_tasks"
-GUIDED_FLOW_CURRENT = "guided_flow_current"
 
 
 # ============================================
@@ -175,20 +171,17 @@ def handle_pending_task_input(message, from_number, whatsapp_account):
         return True
     
     # Check for old-style task creation mode
-    cache_key = f"task_creation_mode:{from_number}"
-    mode = frappe.cache().get_value(cache_key)
-    
-    if not mode:
+    if not has_context(from_number, "task_creation_mode"):
         return False
     
     # Check for cancel
     if message.strip().lower() == 'cancel':
-        frappe.cache().delete_value(cache_key)
+        clear_context(from_number)
         send_reply(from_number, "❌ Task creation cancelled.", whatsapp_account)
         return True
     
     # Clear the mode
-    frappe.cache().delete_value(cache_key)
+    clear_context(from_number)
     
     # Process as task creation (parse the lines directly)
     current_user = get_user_by_phone(from_number)
@@ -276,10 +269,12 @@ def handle_menu_add_task(from_number, whatsapp_account):
         )
         return
     
-    # Initialize guided flow with step = "name"
-    _set_guided_flow_step(from_number, "name")
-    _set_guided_flow_tasks(from_number, [])
-    _clear_guided_flow_current(from_number)
+    # Initialize guided flow
+    set_context(from_number, "guided_flow", {
+        "step": "name",
+        "tasks": [],
+        "current": {}
+    })
     
     message = (
         "📝 *Create New Task*\n\n"
@@ -292,28 +287,32 @@ def handle_menu_add_task(from_number, whatsapp_account):
 
 def handle_guided_flow_input(message, from_number, whatsapp_account):
     """Handle text input in guided flow"""
-    step = _get_guided_flow_step(from_number)
+    context_data = get_context_data(from_number, "guided_flow")
     
+    if not context_data:
+        return False
+    
+    step = context_data.get("step")
     if not step:
         return False
     
     # Handle cancel at any step
     if message.strip().lower() == 'cancel':
-        _clear_all_guided_flow(from_number)
+        clear_context(from_number)
         send_reply(from_number, "❌ Task creation cancelled.", whatsapp_account)
         return True
     
     if step == "name":
-        return _handle_step_task_name(message, from_number, whatsapp_account)
+        return _handle_step_task_name(message, from_number, whatsapp_account, context_data)
     elif step == "deadline":
-        return _handle_step_deadline(message, from_number, whatsapp_account)
+        return _handle_step_deadline(message, from_number, whatsapp_account, context_data)
     elif step == "assignee":
-        return _handle_step_assignee(message, from_number, whatsapp_account)
+        return _handle_step_assignee(message, from_number, whatsapp_account, context_data)
     
     return False
 
 
-def _handle_step_task_name(message, from_number, whatsapp_account):
+def _handle_step_task_name(message, from_number, whatsapp_account, context_data):
     """Step 1: Capture task name, ask for deadline"""
     task_name = message.strip()
     
@@ -321,11 +320,10 @@ def _handle_step_task_name(message, from_number, whatsapp_account):
         send_reply(from_number, "❌ Please enter a valid task name.", whatsapp_account)
         return True
     
-    # Store current task info
-    _set_guided_flow_current(from_number, {"task_name": task_name})
-    
-    # Move to deadline step
-    _set_guided_flow_step(from_number, "deadline")
+    # Update context
+    context_data["step"] = "deadline"
+    context_data["current"] = {"task_name": task_name}
+    set_context(from_number, "guided_flow", context_data)
     
     buttons = [
         {"id": "GUIDED_TODAY", "title": "📅 Today"},
@@ -343,19 +341,22 @@ def _handle_step_task_name(message, from_number, whatsapp_account):
     return True
 
 
-def _handle_step_deadline(message, from_number, whatsapp_account):
+def _handle_step_deadline(message, from_number, whatsapp_account, context_data=None):
     """Step 2: Capture deadline, ask for assignee"""
+    # Get context if not provided (for button handlers)
+    if context_data is None:
+        context_data = get_context_data(from_number, "guided_flow")
+        if not context_data:
+            return False
+    
     # Parse the deadline
     deadline = parse_date(message)
     deadline_display = format_date_display(deadline)
     
-    # Update current task info
-    current = _get_guided_flow_current(from_number)
-    current["deadline"] = str(deadline)
-    _set_guided_flow_current(from_number, current)
-    
-    # Move to assignee step
-    _set_guided_flow_step(from_number, "assignee")
+    # Update context
+    context_data["step"] = "assignee"
+    context_data["current"]["deadline"] = str(deadline)
+    set_context(from_number, "guided_flow", context_data)
     
     # Get current user for "Assign to me" option
     current_user = get_user_by_phone(from_number)
@@ -365,21 +366,26 @@ def _handle_step_deadline(message, from_number, whatsapp_account):
         {"id": "GUIDED_ASSIGN_ME", "title": f"👤 {user_display[:17]}"}
     ]
     
-    message = (
-        f"✅ Task: *{current['task_name']}*\n"
+    msg = (
+        f"✅ Task: *{context_data['current']['task_name']}*\n"
         f"📅 Deadline: *{deadline_display}*\n\n"
         "Step 3 of 3: *Assignee*\n\n"
         "Who should do this task?\n\n"
         "💡 _Type a name or email to search, or tap the button below._"
     )
     
-    send_interactive_message(from_number, message, buttons, whatsapp_account)
+    send_interactive_message(from_number, msg, buttons, whatsapp_account)
     return True
 
 
-def _handle_step_assignee(message, from_number, whatsapp_account):
+def _handle_step_assignee(message, from_number, whatsapp_account, context_data=None):
     """Step 3: Capture assignee, show confirmation"""
-    current = _get_guided_flow_current(from_number)
+    # Get context if not provided
+    if context_data is None:
+        context_data = get_context_data(from_number, "guided_flow")
+        if not context_data:
+            return False
+    
     current_user = get_user_by_phone(from_number)
     
     # Search for user
@@ -449,10 +455,13 @@ def handle_guided_deadline_button(deadline_type, from_number, whatsapp_account):
 
 def _finalize_guided_task(from_number, whatsapp_account, assignee, assignee_display):
     """Finalize the current guided task and show confirmation or add-another option"""
-    from frappe.utils import getdate
     
-    current = _get_guided_flow_current(from_number)
-    tasks = _get_guided_flow_tasks(from_number)
+    context_data = get_context_data(from_number, "guided_flow")
+    if not context_data:
+        return False
+    
+    current = context_data.get("current", {})
+    tasks = context_data.get("tasks", [])
     
     # Add current task to list
     tasks.append({
@@ -462,9 +471,8 @@ def _finalize_guided_task(from_number, whatsapp_account, assignee, assignee_disp
         "assignee_display": assignee_display
     })
     
-    _set_guided_flow_tasks(from_number, tasks)
-    _clear_guided_flow_current(from_number)
-    _set_guided_flow_step(from_number, None)
+    # Clear the guided flow context
+    clear_context(from_number)
     
     # Show confirmation with "Add Another" option
     show_task_confirmation(tasks, from_number, whatsapp_account, show_add_another=True)
@@ -498,55 +506,67 @@ def handle_my_tasks_trigger(message, from_number, whatsapp_account):
 
 
 # ============================================
-# GUIDED FLOW CACHE HELPERS
+# GUIDED FLOW HELPERS (for other modules)
 # ============================================
 
 def _get_guided_flow_step(from_number):
     """Get current step in guided flow"""
-    return frappe.cache().get_value(f"{GUIDED_FLOW_STEP}:{from_number}")
+    context_data = get_context_data(from_number, "guided_flow")
+    if context_data:
+        return context_data.get("step")
+    return None
 
 
 def _set_guided_flow_step(from_number, step):
     """Set current step in guided flow"""
-    if step:
-        frappe.cache().set_value(f"{GUIDED_FLOW_STEP}:{from_number}", step, expires_in_sec=600)
+    context_data = get_context_data(from_number, "guided_flow")
+    if context_data:
+        context_data["step"] = step
+        set_context(from_number, "guided_flow", context_data)
     else:
-        frappe.cache().delete_value(f"{GUIDED_FLOW_STEP}:{from_number}")
+        set_context(from_number, "guided_flow", {"step": step, "tasks": [], "current": {}})
 
 
 def _get_guided_flow_tasks(from_number):
     """Get accumulated tasks in guided flow"""
-    data = frappe.cache().get_value(f"{GUIDED_FLOW_TASKS}:{from_number}")
-    if data:
-        return json.loads(data)
+    context_data = get_context_data(from_number, "guided_flow")
+    if context_data:
+        return context_data.get("tasks", [])
     return []
 
 
 def _set_guided_flow_tasks(from_number, tasks):
     """Set accumulated tasks in guided flow"""
-    frappe.cache().set_value(f"{GUIDED_FLOW_TASKS}:{from_number}", json.dumps(tasks, default=str), expires_in_sec=600)
+    context_data = get_context_data(from_number, "guided_flow")
+    if context_data:
+        context_data["tasks"] = tasks
+        set_context(from_number, "guided_flow", context_data)
 
 
 def _get_guided_flow_current(from_number):
     """Get current task being built in guided flow"""
-    data = frappe.cache().get_value(f"{GUIDED_FLOW_CURRENT}:{from_number}")
-    if data:
-        return json.loads(data)
+    context_data = get_context_data(from_number, "guided_flow")
+    if context_data:
+        return context_data.get("current", {})
     return {}
 
 
 def _set_guided_flow_current(from_number, current):
     """Set current task being built in guided flow"""
-    frappe.cache().set_value(f"{GUIDED_FLOW_CURRENT}:{from_number}", json.dumps(current, default=str), expires_in_sec=600)
+    context_data = get_context_data(from_number, "guided_flow")
+    if context_data:
+        context_data["current"] = current
+        set_context(from_number, "guided_flow", context_data)
 
 
 def _clear_guided_flow_current(from_number):
     """Clear current task in guided flow"""
-    frappe.cache().delete_value(f"{GUIDED_FLOW_CURRENT}:{from_number}")
+    context_data = get_context_data(from_number, "guided_flow")
+    if context_data:
+        context_data["current"] = {}
+        set_context(from_number, "guided_flow", context_data)
 
 
 def _clear_all_guided_flow(from_number):
-    """Clear all guided flow cache for a user"""
-    frappe.cache().delete_value(f"{GUIDED_FLOW_STEP}:{from_number}")
-    frappe.cache().delete_value(f"{GUIDED_FLOW_TASKS}:{from_number}")
-    frappe.cache().delete_value(f"{GUIDED_FLOW_CURRENT}:{from_number}")
+    """Clear all guided flow context for a user"""
+    clear_context(from_number)
