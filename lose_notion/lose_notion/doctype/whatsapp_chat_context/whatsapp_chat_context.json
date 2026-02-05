@@ -27,7 +27,7 @@
         },
         {
             "fieldname": "context_data",
-            "fieldtype": "JSON",
+            "fieldtype": "Small Text",
             "label": "Context Data"
         }
     ],

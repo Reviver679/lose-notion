@@ -44,7 +44,7 @@ def handle_task_selection(task_id, from_number, whatsapp_account):
         task_data = frappe.db.get_value(
             "Sprint Board",
             task_id,
-            ["task_name", "status"],
+            ["task_name", "status", "deadline"],
             as_dict=True
         )
         
@@ -53,6 +53,11 @@ def handle_task_selection(task_id, from_number, whatsapp_account):
             return
         
         current_status = task_data.status
+        
+        # Store task_id wrapped in dict for "change" command
+        # JSON field requires object, not bare string
+        set_context(from_number, "deadline_edit_task", {"task_id": task_id})
+
         
         # All status options with display names
         all_statuses = [
@@ -71,7 +76,8 @@ def handle_task_selection(task_id, from_number, whatsapp_account):
         message_body = (
             f"📋 *Task:* {task_data.task_name}\n"
             f"📌 *Current Status:* {get_status_display(current_status)}\n\n"
-            f"Select new status:"
+            f"Select new status:\n\n"
+            f"💡 _Type `change` to change deadline_"
         )
         
         send_interactive_message(from_number, message_body, status_buttons, whatsapp_account)

@@ -251,8 +251,16 @@ def handle_deadline_button(deadline_type, from_number, whatsapp_account):
 
 
 def handle_deadline_input(message, from_number, whatsapp_account):
-    """Handle new deadline input"""
+    """Handle new deadline input - for both pending tasks and existing tasks"""
     
+    # First check if editing an existing task (from "change" command)
+    existing_task_context = get_context_data(from_number, "deadline_edit_task")
+    if existing_task_context:
+        task_id = existing_task_context.get("task_id") if isinstance(existing_task_context, dict) else None
+        if task_id:
+            return _update_existing_task_deadline(task_id, message, from_number, whatsapp_account)
+    
+    # Otherwise check for pending task deadline edit (during creation)
     context_data = get_context_data(from_number, "deadline_edit")
     if not context_data or context_data.get("mode") != "editing":
         return False
@@ -294,6 +302,50 @@ def handle_deadline_input(message, from_number, whatsapp_account):
     
     show_task_confirmation(confirmation_tasks, from_number, whatsapp_account)
     return True
+
+
+def _update_existing_task_deadline(task_id, message, from_number, whatsapp_account):
+    """Update deadline for an existing task in database"""
+    
+    # Parse new deadline
+    new_deadline = parse_date(message)
+    deadline_display = format_date_display(new_deadline)
+    
+    try:
+        # Get task name for confirmation
+        task_name = frappe.db.get_value("Sprint Board", task_id, "task_name")
+        
+        if not task_name:
+            send_reply(from_number, "❌ Task not found.", whatsapp_account)
+            clear_context(from_number)
+            return True
+        
+        # Update task deadline in database
+        frappe.db.set_value("Sprint Board", task_id, "deadline", new_deadline)
+        frappe.db.commit()
+        
+        # Clear context
+        clear_context(from_number)
+        
+        send_reply(
+            from_number,
+            f"✅ Deadline updated to *{deadline_display}*\n\n"
+            f"📋 Task: {task_name}",
+            whatsapp_account
+        )
+        
+        # Optionally show updated task list
+        current_user = get_user_by_phone(from_number)
+        if current_user:
+            send_my_tasks(from_number, current_user["name"], whatsapp_account)
+        
+        return True
+        
+    except Exception as e:
+        frappe.log_error(f"Error updating deadline: {str(e)}", "Deadline Update Error")
+        send_reply(from_number, "❌ Error updating deadline. Please try again.", whatsapp_account)
+        return True
+
 
 
 # ============================================

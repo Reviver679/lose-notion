@@ -11,6 +11,7 @@ from .task_handlers import send_task_list_with_numbers
 
 # Constants
 MENU_TRIGGERS = ['menu', 'help', 'start']
+GUIDE_TRIGGER = 'guide'
 
 STATUS_FILTER_TRIGGERS = {
     'not started': 'Not Started',
@@ -19,7 +20,7 @@ STATUS_FILTER_TRIGGERS = {
 }
 
 # Special filter triggers (not actual status values)
-SPECIAL_FILTER_TRIGGERS = ['today', 'overdue']
+SPECIAL_FILTER_TRIGGERS = ['today', 'overdue', 'change']
 
 STATUS_DISPLAY = {
     "Not Started": "⚫ Not Started",
@@ -32,6 +33,7 @@ STATUS_DISPLAY = {
 def get_status_display(status):
     """Get display text with emoji for status"""
     return STATUS_DISPLAY.get(status, status)
+
 
 
 def handle_menu_trigger(message, from_number, whatsapp_account):
@@ -54,16 +56,25 @@ def handle_menu_trigger(message, from_number, whatsapp_account):
         "• `add tasks` - Create new tasks\n"
         "• `not started` / `in progress` / `on hold` - Filter by status\n"
         "• `today` - Tasks due today\n"
-        "• `overdue` - Overdue tasks"
+        "• `overdue` - Overdue tasks\n"
+        "• `guide` - Detailed help guide"
     )
+
     
     send_interactive_message(from_number, message_body, buttons, whatsapp_account)
     return True
 
 
 def handle_status_filter_trigger(message, from_number, whatsapp_account):
-    """Handle status filter triggers like 'not started', 'in progress', 'on hold', 'today', 'overdue'"""
+    """Handle status filter triggers like 'not started', 'in progress', 'on hold', 'today', 'overdue', 'change', 'guide'"""
+    from ..context_storage import get_context_data, clear_context
+    
     message_lower = message.strip().lower()
+    
+    # Handle guide trigger first (doesn't need user account)
+    if message_lower == GUIDE_TRIGGER:
+        send_guide(from_number, whatsapp_account)
+        return True
     
     current_user = get_user_by_phone(from_number)
     if not current_user:
@@ -92,7 +103,129 @@ def handle_status_filter_trigger(message, from_number, whatsapp_account):
         send_overdue_tasks(from_number, current_user["name"], whatsapp_account)
         return True
     
+    if message_lower == 'change':
+        # Check if there's a task_id stored from selection
+        context = get_context_data(from_number, "deadline_edit_task")
+        task_id = context.get("task_id") if context else None
+        if task_id:
+            handle_change_deadline_for_task(from_number, task_id, whatsapp_account)
+            return True
+        else:
+            send_reply(
+                from_number,
+                "❌ No task selected. Please select a task first from your task list.",
+                whatsapp_account
+            )
+            return True
+    
     return False
+
+
+
+
+def handle_change_deadline_for_task(from_number, task_id, whatsapp_account):
+    """Handle 'change' command to change deadline of selected task"""
+    from ..context_storage import set_context
+    from ..date_utils import format_date_display
+    
+    send_typing_indicator(from_number, whatsapp_account)
+    
+    # Fetch task details from database (not from context to avoid size issues)
+    task_data = frappe.db.get_value(
+        "Sprint Board",
+        task_id,
+        ["task_name", "deadline"],
+        as_dict=True
+    )
+    
+    if not task_data:
+        send_reply(from_number, "❌ Task not found.", whatsapp_account)
+        return
+    
+    task_name = task_data.task_name
+    current_deadline = task_data.deadline
+    
+    # Keep deadline_edit_task context for the input handler
+    # (already set by handle_task_selection)
+    
+    deadline_display = format_date_display(current_deadline) if current_deadline else "Not set"
+    
+    buttons = [
+        {"id": "DEADLINE_TODAY", "title": "📅 Today"},
+        {"id": "DEADLINE_TOMORROW", "title": "📅 Tomorrow"}
+    ]
+    
+    message_body = (
+        f"📋 *Task:* {task_name}\n"
+        f"📅 *Current Deadline:* {deadline_display}\n\n"
+        f"Select new deadline or type a date:\n\n"
+        f"💡 _Examples: `next friday`, `Feb 15`, `in 3 days`_"
+    )
+    
+    send_interactive_message(from_number, message_body, buttons, whatsapp_account)
+
+
+def send_guide(to_number, whatsapp_account):
+    """Send detailed guide on how to use the WhatsApp task bot"""
+    send_typing_indicator(to_number, whatsapp_account)
+    
+    guide_message = (
+        "📖 *Task Manager - Complete Guide*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        "🔹 *VIEW YOUR TASKS*\n"
+        "• Type `my tasks` or `my` to see all your pending tasks\n"
+        "• Type `today` to see tasks due today\n"
+        "• Type `overdue` to see overdue tasks\n"
+        "• Type `not started`, `in progress`, or `on hold` to filter by status\n\n"
+        
+        "🔹 *CREATE TASKS*\n"
+        "Type `new` or `add tasks` followed by task details:\n"
+        "```\n"
+        "new\n"
+        "Task name ... deadline ... assignee\n"
+        "```\n"
+        "*Examples:*\n"
+        "• `new Fix bug` - Creates task for today, assigned to you\n"
+        "• `new Fix bug ... tomorrow` - Due tomorrow\n"
+        "• `new Fix bug ... Feb 10 ... Raj` - Assigned to Raj\n\n"
+        
+        "📝 *Create multiple tasks at once:*\n"
+        "```\n"
+        "new\n"
+        "Task 1\n"
+        "Task 2 ... tomorrow\n"
+        "Task 3 ... next week ... John\n"
+        "```\n\n"
+        
+        "🔹 *UPDATE TASKS*\n"
+        "1. Type `my tasks` to see your tasks\n"
+        "2. Select a task or type its number\n"
+        "3. Choose a new status from the buttons\n"
+        "4. Type `change` to change deadline instead\n\n"
+        
+        "🔹 *QUICK COMMANDS*\n"
+        "• `menu` or `help` - Show main menu\n"
+        "• `guide` - Show this guide\n"
+        "• `more` - Load more tasks (when list is long)\n"
+        "• `change` - Change deadline of selected task\n\n"
+        
+        "🔹 *DATE FORMATS*\n"
+        "You can use natural language dates:\n"
+        "• `today`, `tomorrow`, `yesterday`\n"
+        "• `next monday`, `this friday`\n"
+        "• `Feb 10`, `10 Feb`, `2/10`\n"
+        "• `in 3 days`, `in 2 weeks`\n\n"
+        
+        "🔹 *STATUS LEGEND*\n"
+        "⚫ Not Started\n"
+        "🔵 In Progress\n"
+        "🟢 Completed\n"
+        "🟠 On Hold\n"
+        "🔴 Overdue"
+    )
+    
+    send_reply(to_number, guide_message, whatsapp_account)
 
 
 def send_filtered_tasks(to_number, assigned_to, status, whatsapp_account):
