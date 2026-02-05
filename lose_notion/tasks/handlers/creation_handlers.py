@@ -46,8 +46,19 @@ def get_task_lines(message, trigger):
 
 
 def parse_task_line(line):
-    """Parse a task line into components: task_name, deadline, assignee"""
-    parts = [p.strip() for p in line.split('|')]
+    """Parse a task line into components: task_name, deadline, assignee
+    
+    Supports two separator formats:
+    - task name | deadline | @assignee (pipe separator)
+    - task name ... deadline ... assignee (triple dot separator)
+    
+    The assignee can optionally have @ prefix.
+    """
+    # Determine which separator to use
+    if '...' in line:
+        parts = [p.strip() for p in line.split('...')]
+    else:
+        parts = [p.strip() for p in line.split('|')]
     
     task_name = parts[0] if parts else ""
     deadline_str = None
@@ -57,6 +68,9 @@ def parse_task_line(line):
         part = part.strip()
         if part.startswith('@'):
             assignee_str = part[1:]
+        elif _looks_like_assignee(part):
+            # If it doesn't look like a date, treat as assignee
+            assignee_str = part
         else:
             deadline_str = part
     
@@ -65,6 +79,49 @@ def parse_task_line(line):
         "deadline_str": deadline_str,
         "assignee_str": assignee_str
     }
+
+
+def _looks_like_assignee(text):
+    """Check if text looks like an assignee name rather than a date
+    
+    Returns True if:
+    - Contains @ symbol
+    - Is a single word that doesn't match common date patterns
+    """
+    text = text.strip().lower()
+    
+    # Date keywords that should NOT be treated as assignee
+    date_keywords = [
+        'today', 'tomorrow', 'yesterday',
+        'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+        'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun',
+        'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+        'january', 'february', 'march', 'april', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+        'next', 'this', 'in'
+    ]
+    
+    # If starts with a date keyword, it's likely a date
+    for keyword in date_keywords:
+        if text.startswith(keyword):
+            return False
+    
+    # If contains numbers with date-like patterns, it's likely a date
+    import re
+    if re.match(r'^\d{1,2}[/-]\d{1,2}', text):  # 12/25 or 12-25
+        return False
+    if re.match(r'^\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)', text):
+        return False
+    
+    # If it's a single word with only letters, likely an assignee name
+    if re.match(r'^[a-zA-Z]+$', text):
+        return True
+    
+    # If contains @, definitely an assignee
+    if '@' in text:
+        return True
+    
+    return False
+
 
 
 def handle_task_creation_trigger(message, from_number, whatsapp_account):
@@ -147,18 +204,20 @@ def send_format_sample(to_number, whatsapp_account):
     message = (
         "📝 *Create New Tasks*\n\n"
         "Send task names, one per line:\n"
-        "`task name | deadline | @assignee`\n\n"
+        "`task name ... deadline ... assignee`\n"
+        "_or use | as separator_\n\n"
         "*Examples:*\n"
         "```\n"
-        "add tasks\n"
+        "new\n"
         "Fix login bug\n"
-        "Update dashboard | tomorrow\n"
-        "Review PR | Feb 10 | @john@email.com\n"
+        "Update dashboard ... tomorrow\n"
+        "Review PR ... Feb 10 ... Raj\n"
         "```\n\n"
         "📅 Deadline & 👤 assignee are optional.\n"
         "Defaults: Today, assigned to you."
     )
     send_reply(to_number, message, whatsapp_account)
+
 
 
 def handle_pending_task_input(message, from_number, whatsapp_account):

@@ -123,7 +123,7 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
     """Send remaining incomplete tasks after a status update
     
     IMPROVEMENT: Now shows both pending AND overdue tasks (was overdue-only)
-    Hides On Hold tasks but shows count at bottom
+    Hides On Hold tasks but shows count at bottom with all status counts
     """
     
     try:
@@ -147,14 +147,28 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
             )
             return
         
-        # Separate On Hold tasks from active tasks
+        # Separate On Hold tasks from active tasks and count statuses
         task_list = []
-        on_hold_count = 0
+        status_counts = {
+            "not_started": 0,
+            "in_progress": 0,
+            "overdue": 0,
+            "on_hold": 0
+        }
         
         for task in remaining:
             if task.status == "On Hold":
-                on_hold_count += 1
+                status_counts["on_hold"] += 1
                 continue
+            
+            # Check if task is overdue
+            is_overdue = task.deadline and getdate(task.deadline) < today_date
+            if is_overdue:
+                status_counts["overdue"] += 1
+            elif task.status == "Not Started":
+                status_counts["not_started"] += 1
+            elif task.status == "In Progress":
+                status_counts["in_progress"] += 1
             
             days_text = get_days_text(task.deadline, today_date)
             task_list.append({
@@ -167,8 +181,8 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
         
         if not task_list:
             msg = "✅ No active tasks remaining!"
-            if on_hold_count > 0:
-                msg += f"\n\n🟠 {on_hold_count} task{'s' if on_hold_count > 1 else ''} on hold"
+            if status_counts["on_hold"] > 0:
+                msg += f"\n\n🟠 {status_counts['on_hold']} task{'s' if status_counts['on_hold'] > 1 else ''} on hold"
             send_reply(to_number, msg, whatsapp_account)
             return
         
@@ -182,7 +196,7 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
         
         task_list.sort(key=sort_key)
         
-        send_task_list_with_numbers(to_number, task_list, whatsapp_account, "Remaining Tasks", on_hold_count=on_hold_count)
+        send_task_list_with_numbers(to_number, task_list, whatsapp_account, "Remaining Tasks", status_counts=status_counts)
             
     except Exception as e:
         frappe.log_error(f"Error sending remaining tasks: {str(e)}", "Task Alert Error")
@@ -191,7 +205,7 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
 def send_my_tasks(to_number, assigned_to, whatsapp_account):
     """Send list of user's incomplete tasks
     
-    Hides On Hold tasks but shows count at bottom
+    Hides On Hold tasks but shows count at bottom with all status counts
     """
     
     try:
@@ -211,14 +225,28 @@ def send_my_tasks(to_number, assigned_to, whatsapp_account):
             send_reply(to_number, "✅ You have no pending tasks! Great job! 🎉", whatsapp_account)
             return
         
-        # Separate On Hold tasks from active tasks
+        # Separate On Hold tasks from active tasks and count statuses
         my_tasks = []
-        on_hold_count = 0
+        status_counts = {
+            "not_started": 0,
+            "in_progress": 0,
+            "overdue": 0,
+            "on_hold": 0
+        }
         
         for task in tasks:
             if task.status == "On Hold":
-                on_hold_count += 1
+                status_counts["on_hold"] += 1
                 continue
+            
+            # Check if task is overdue
+            is_overdue = task.deadline and getdate(task.deadline) < today_date
+            if is_overdue:
+                status_counts["overdue"] += 1
+            elif task.status == "Not Started":
+                status_counts["not_started"] += 1
+            elif task.status == "In Progress":
+                status_counts["in_progress"] += 1
             
             days_text = get_days_text(task.deadline, today_date)
             
@@ -232,8 +260,8 @@ def send_my_tasks(to_number, assigned_to, whatsapp_account):
         
         if not my_tasks:
             msg = "✅ No active tasks!"
-            if on_hold_count > 0:
-                msg += f"\n\n🟠 {on_hold_count} task{'s' if on_hold_count > 1 else ''} on hold"
+            if status_counts["on_hold"] > 0:
+                msg += f"\n\n🟠 {status_counts['on_hold']} task{'s' if status_counts['on_hold'] > 1 else ''} on hold"
             send_reply(to_number, msg, whatsapp_account)
             return
         
@@ -247,11 +275,12 @@ def send_my_tasks(to_number, assigned_to, whatsapp_account):
         
         my_tasks.sort(key=sort_key)
         
-        send_task_list_with_numbers(to_number, my_tasks, whatsapp_account, "Your Pending Tasks", on_hold_count=on_hold_count)
+        send_task_list_with_numbers(to_number, my_tasks, whatsapp_account, "Your Pending Tasks", status_counts=status_counts)
         
     except Exception as e:
         frappe.log_error(f"Error sending my tasks: {str(e)}", "Task Alert Error")
         send_reply(to_number, "❌ An error occurred. Please try again.", whatsapp_account)
+
 
 
 def handle_more_command(message, from_number, whatsapp_account):
@@ -266,12 +295,13 @@ def handle_more_command(message, from_number, whatsapp_account):
     
     task_list = context["tasks"]
     current_page = context.get("page", 0)
-    on_hold_count = context.get("on_hold_count", 0)
+    status_counts = context.get("status_counts", {})
+    exclude_status = context.get("exclude_status")
     header_text = context.get("header", "Your Tasks")
     
     # Move to next page
     next_page = current_page + 1
-    _send_paginated_task_list(from_number, task_list, whatsapp_account, header_text, on_hold_count, next_page)
+    _send_paginated_task_list(from_number, task_list, whatsapp_account, header_text, status_counts, exclude_status, next_page)
     return True
 
 
@@ -285,12 +315,13 @@ def handle_load_more_button(from_number, whatsapp_account):
     
     task_list = context["tasks"]
     current_page = context.get("page", 0)
-    on_hold_count = context.get("on_hold_count", 0)
+    status_counts = context.get("status_counts", {})
+    exclude_status = context.get("exclude_status")
     header_text = context.get("header", "Your Tasks")
     
     # Move to next page
     next_page = current_page + 1
-    _send_paginated_task_list(from_number, task_list, whatsapp_account, header_text, on_hold_count, next_page)
+    _send_paginated_task_list(from_number, task_list, whatsapp_account, header_text, status_counts, exclude_status, next_page)
 
 
 def handle_number_selection(message, from_number, whatsapp_account):
@@ -327,16 +358,21 @@ def handle_number_selection(message, from_number, whatsapp_account):
         return False
 
 
-def send_task_list_with_numbers(to_number, task_list, whatsapp_account, header_text="Your Tasks", on_hold_count=0):
+def send_task_list_with_numbers(to_number, task_list, whatsapp_account, header_text="Your Tasks", status_counts=None, exclude_status=None):
     """Send task list with support for > 10 items via Load More button and number input
     
     Args:
-        on_hold_count: Number of hidden On Hold tasks to show in summary
+        status_counts: Dict with counts for not_started, in_progress, overdue, on_hold
+        exclude_status: Status key to exclude from summary (e.g., when viewing filtered list)
     """
+    if status_counts is None:
+        status_counts = {"not_started": 0, "in_progress": 0, "overdue": 0, "on_hold": 0}
+    
     if not task_list:
         msg = "✅ No tasks found!"
-        if on_hold_count > 0:
-            msg += f"\n\n🟠 {on_hold_count} task{'s' if on_hold_count > 1 else ''} on hold"
+        summary = _build_status_summary(status_counts, exclude_status)
+        if summary:
+            msg += f"\n\n{summary}"
         send_reply(to_number, msg, whatsapp_account)
         return
     
@@ -355,21 +391,57 @@ def send_task_list_with_numbers(to_number, task_list, whatsapp_account, header_t
     context_data = {
         "tasks": compact_list,
         "page": 0,
-        "on_hold_count": on_hold_count,
+        "status_counts": status_counts,
+        "exclude_status": exclude_status,
         "header": header_text
     }
     set_context(to_number, "task_list_context", context_data)
     
     # Send first page
-    _send_paginated_task_list(to_number, compact_list, whatsapp_account, header_text, on_hold_count, page=0)
+    _send_paginated_task_list(to_number, compact_list, whatsapp_account, header_text, status_counts, exclude_status, page=0)
 
 
-def _send_paginated_task_list(to_number, task_list, whatsapp_account, header_text, on_hold_count, page=0):
+def _build_status_summary(status_counts, exclude_status=None):
+    """Build status summary string with emojis
+    
+    Args:
+        status_counts: Dict with not_started, in_progress, overdue, on_hold counts
+        exclude_status: Status key to exclude from summary
+    
+    Returns:
+        Status summary string or empty string if no counts
+    """
+    parts = []
+    
+    if exclude_status != "not_started" and status_counts.get("not_started", 0) > 0:
+        count = status_counts["not_started"]
+        parts.append(f"⚫ {count} not started")
+    
+    if exclude_status != "in_progress" and status_counts.get("in_progress", 0) > 0:
+        count = status_counts["in_progress"]
+        parts.append(f"🔵 {count} in progress")
+    
+    if exclude_status != "overdue" and status_counts.get("overdue", 0) > 0:
+        count = status_counts["overdue"]
+        parts.append(f"🔴 {count} overdue")
+    
+    if exclude_status != "on_hold" and status_counts.get("on_hold", 0) > 0:
+        count = status_counts["on_hold"]
+        parts.append(f"🟠 {count} on hold")
+    
+    return "\n".join(parts)
+
+
+
+def _send_paginated_task_list(to_number, task_list, whatsapp_account, header_text, status_counts, exclude_status=None, page=0):
     """Internal function to send a page of tasks
     
     Args:
         page: 0-indexed page number, each page shows 9 tasks + Load More button if needed
+        status_counts: Dict with counts for not_started, in_progress, overdue, on_hold
+        exclude_status: Status key to exclude from summary
     """
+
     send_typing_indicator(to_number, whatsapp_account)
     
     total_tasks = len(task_list)
@@ -438,11 +510,13 @@ def _send_paginated_task_list(to_number, task_list, whatsapp_account, header_tex
     else:
         message_body += "Select a task to update its status."
     
-    # Add On Hold summary at the bottom
-    if on_hold_count > 0:
-        message_body += f"\n\n🟠 {on_hold_count} task{'s' if on_hold_count > 1 else ''} on hold"
+    # Add status summary at the bottom
+    summary = _build_status_summary(status_counts, exclude_status)
+    if summary:
+        message_body += f"\n\n{summary}"
     
     send_interactive_message(to_number, message_body, buttons, whatsapp_account)
+
 
 
 def send_task_list(to_number, tasks, whatsapp_account, is_initial=False):
