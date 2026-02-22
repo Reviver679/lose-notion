@@ -87,7 +87,7 @@ def handle_task_confirmation(action, from_number, whatsapp_account):
                 deadline = task["deadline"]
                 if isinstance(deadline, str):
                     deadline = getdate(deadline)
-                
+
                 # Create Sprint Board document
                 sprint_task = frappe.get_doc({
                     "doctype": "Sprint Board",
@@ -99,7 +99,8 @@ def handle_task_confirmation(action, from_number, whatsapp_account):
                     "created_on": now_datetime()
                 })
                 sprint_task.insert(ignore_permissions=True)
-            
+                _notify_assignee(task, created_by, whatsapp_account)
+
             frappe.db.commit()
             
             clear_context(from_number)
@@ -395,6 +396,47 @@ def handle_ambiguous_users(task_info, from_number, whatsapp_account, confirmed_t
     )
     
     send_interactive_message(from_number, message, buttons, whatsapp_account)
+
+
+def _notify_assignee(task, created_by, whatsapp_account):
+	"""Send a WhatsApp notification to the assignee when a task is assigned to them.
+
+	Skips silently if the assignee is the creator (self-assignment) or has no phone number.
+	"""
+	assignee = task["assignee"]
+
+	if assignee == created_by:
+		return
+
+	try:
+		mobile_no = frappe.db.get_value("User", assignee, "mobile_no")
+		if not mobile_no:
+			return
+
+		mobile_no = str(mobile_no).replace(" ", "").replace("-", "").replace("+", "")
+
+		creator_name = frappe.db.get_value("User", created_by, "full_name") or created_by
+
+		deadline = task["deadline"]
+		if isinstance(deadline, str):
+			deadline = getdate(deadline)
+		deadline_display = format_date_display(deadline)
+
+		message = (
+			f"📋 *New Task Assigned to You*\n\n"
+			f"*{task['task_name']}*\n"
+			f"📅 Due: {deadline_display}\n"
+			f"👤 Assigned by: {creator_name}\n\n"
+			f"Reply *my tasks* to view all your tasks."
+		)
+
+		send_reply(mobile_no, message, whatsapp_account)
+
+	except Exception as e:
+		frappe.log_error(
+			f"Error sending assignment notification to {assignee}: {str(e)}",
+			"Task Assignment Notification Error"
+		)
 
 
 def handle_user_selection(user_name, from_number, whatsapp_account):
