@@ -58,11 +58,11 @@ def send_overdue_task_alerts():
     
     today_date = getdate(today())
     
-    # Get all incomplete, overdue tasks from Sprint Board
+    # Get all incomplete, overdue tasks from Sprint Board (excluding On Hold)
     overdue_tasks = frappe.get_all(
         "Sprint Board",
         filters={
-            "status": ["!=", "Completed"],
+            "status": ["not in", ["Completed", "On Hold"]],
             "deadline": ["<", today_date],
             "assigned_to": ["is", "set"]
         },
