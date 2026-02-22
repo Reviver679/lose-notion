@@ -534,25 +534,30 @@ def send_task_list(to_number, tasks, whatsapp_account, is_initial=False):
     
     buttons = []
     task_list_text = ""
-    
+    total_tasks = len(tasks)
+
     for idx, task in enumerate(tasks, 1):
         task_id = task["task_name"]
-        task_title = task["task_title"]
+        task_title = task["task_title"] or "Unnamed Task"
         days_overdue = task["days_overdue"]
         status = task.get("status", "Not Started")
-        
+
         status_emoji = get_status_emoji(status)
         overdue_text = "1 day" if days_overdue == 1 else f"{days_overdue} days"
-        
-        task_list_text += f"{idx}. {task_title} ({overdue_text} overdue) {status_emoji}\n"
-        
+
+        # Only include first MAX_WHATSAPP_LIST_ITEMS tasks in body to stay within 1024-char limit
+        if idx <= MAX_WHATSAPP_LIST_ITEMS:
+            task_list_text += f"{idx}. {task_title[:35]} ({overdue_text} overdue) {status_emoji}\n"
+
         buttons.append({
             "id": f"SELECT_TASK:{task_id}",
             "title": task_title[:20],
-            "description": f"Overdue by {overdue_text}"[:72]
+            "description": f"Overdue by {overdue_text}"
         })
-    
-    total_tasks = len(tasks)
+
+    if total_tasks > MAX_WHATSAPP_LIST_ITEMS:
+        remaining = total_tasks - MAX_WHATSAPP_LIST_ITEMS
+        task_list_text += f"... +{remaining} more task{'s' if remaining > 1 else ''}\n"
     
     if is_initial:
         header = f"🚨 *You have {total_tasks} overdue task{'s' if total_tasks > 1 else ''}*"
