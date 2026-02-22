@@ -9,7 +9,7 @@ from ..whatsapp_utils import send_reply, send_interactive_message
 from ..date_utils import format_date_display, parse_date
 from ..user_utils import get_user_by_phone
 from ..context_storage import get_context_data, set_context, clear_context
-from .task_handlers import send_my_tasks
+from .task_handlers import send_my_tasks, _show_overdue_task_prompt
 
 
 def show_task_confirmation(tasks, from_number, whatsapp_account, show_add_another=False):
@@ -253,7 +253,12 @@ def handle_deadline_button(deadline_type, from_number, whatsapp_account):
 
 def handle_deadline_input(message, from_number, whatsapp_account):
     """Handle new deadline input - for both pending tasks and existing tasks"""
-    
+
+    # Check if in overdue review flow with deadline editing active
+    overdue_context = get_context_data(from_number, "overdue_review")
+    if overdue_context and overdue_context.get("editing_deadline"):
+        return _update_overdue_task_deadline_in_review(message, from_number, whatsapp_account)
+
     # First check if editing an existing task (from "change" command)
     existing_task_context = get_context_data(from_number, "deadline_edit_task")
     if existing_task_context:
@@ -302,6 +307,47 @@ def handle_deadline_input(message, from_number, whatsapp_account):
         })
     
     show_task_confirmation(confirmation_tasks, from_number, whatsapp_account)
+    return True
+
+
+def _update_overdue_task_deadline_in_review(message, from_number, whatsapp_account):
+    """Update deadline for current task in overdue review flow, then continue to next task."""
+
+    overdue_context = get_context_data(from_number, "overdue_review")
+    if not overdue_context or not overdue_context.get("queue"):
+        send_reply(from_number, "❌ Session expired. Type `overdue` to start again.", whatsapp_account)
+        return True
+
+    queue = overdue_context["queue"]
+    task = queue[0]
+    task_id = task["task_id"]
+
+    new_deadline = parse_date(message)
+    deadline_display = format_date_display(new_deadline)
+
+    try:
+        frappe.db.set_value("Sprint Board", task_id, "deadline", new_deadline)
+        frappe.db.commit()
+
+        send_reply(
+            from_number,
+            f"✅ Deadline updated to *{deadline_display}*\n\n📋 Task: {task['task_title']}",
+            whatsapp_account
+        )
+
+        # Pop task from queue and continue overdue review
+        queue.pop(0)
+        overdue_context["queue"] = queue
+        overdue_context["skipped"] += 1
+        overdue_context.pop("editing_deadline", None)
+        set_context(from_number, "overdue_review", overdue_context)
+
+        _show_overdue_task_prompt(from_number, overdue_context, whatsapp_account)
+
+    except Exception as e:
+        frappe.log_error(f"Error updating overdue task deadline: {str(e)}", "Deadline Update Error")
+        send_reply(from_number, "❌ Error updating deadline. Please try again.", whatsapp_account)
+
     return True
 
 

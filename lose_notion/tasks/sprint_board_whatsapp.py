@@ -19,6 +19,10 @@ from .handlers.task_handlers import (
     handle_load_more_button,
     send_task_list,
     send_my_tasks,
+    send_overdue_review_flow,
+    handle_overdue_mark_done,
+    handle_overdue_next_task,
+    handle_overdue_change_deadline,
     get_status_emoji
 )
 from .handlers.creation_handlers import (
@@ -88,6 +92,7 @@ def send_overdue_task_alerts():
             "task_name": task.name,
             "task_title": task.task_name,
             "days_overdue": days_overdue,
+            "deadline": str(task.deadline),
             "status": task.status
         })
     
@@ -108,8 +113,8 @@ def send_overdue_task_alerts():
         mobile_no = str(mobile_no).replace(" ", "").replace("-", "").replace("+", "")
         
         try:
-            send_task_list(mobile_no, tasks, WHATSAPP_ACCOUNT, is_initial=True)
-            
+            send_overdue_review_flow(mobile_no, user, WHATSAPP_ACCOUNT, prefetched_tasks=tasks)
+
             # Update last_alerted for all tasks
             for task in tasks:
                 frappe.db.set_value("Sprint Board", task["task_name"], "last_alerted", now_datetime())
@@ -277,6 +282,19 @@ def _handle_button_message(message, from_number, whatsapp_account):
         handle_guided_assignee_button(user_name, from_number, whatsapp_account)
         return
     
+    # Overdue review flow buttons
+    if message == "OVERDUE_MARK_DONE":
+        handle_overdue_mark_done(from_number, whatsapp_account)
+        return
+
+    if message == "OVERDUE_NEXT_TASK":
+        handle_overdue_next_task(from_number, whatsapp_account)
+        return
+
+    if message == "OVERDUE_CHANGE_DEADLINE":
+        handle_overdue_change_deadline(from_number, whatsapp_account)
+        return
+
     # User selection for ambiguous assignee
     if message.startswith("ASSIGN_USER:"):
         user_name = message.replace("ASSIGN_USER:", "").strip()

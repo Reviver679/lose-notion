@@ -527,6 +527,208 @@ def _send_paginated_task_list(to_number, task_list, whatsapp_account, header_tex
 
 
 
+def send_overdue_review_flow(to_number, assigned_to, whatsapp_account, prefetched_tasks=None):
+	"""Start one-by-one overdue task review flow.
+
+	Args:
+		prefetched_tasks: Optional list of task dicts (from scheduled alert) with keys:
+			task_name (docname), task_title, days_overdue, deadline.
+			If None, fetches all overdue tasks from DB.
+	"""
+	from frappe.utils import getdate, today, date_diff
+
+	send_typing_indicator(to_number, whatsapp_account)
+
+	if prefetched_tasks is not None:
+		queue = []
+		for t in prefetched_tasks:
+			queue.append({
+				"task_id": t["task_name"],
+				"task_title": t["task_title"],
+				"deadline": t.get("deadline", ""),
+				"days_overdue": t["days_overdue"],
+			})
+		queue.sort(key=lambda t: t["days_overdue"], reverse=True)
+	else:
+		today_date = getdate(today())
+		overdue_tasks = frappe.get_all(
+			"Sprint Board",
+			filters={
+				"status": ["not in", ["Completed", "On Hold"]],
+				"assigned_to": assigned_to,
+			},
+			fields=["name", "task_name", "deadline", "status"],
+		)
+		queue = []
+		for task in overdue_tasks:
+			if not task.deadline:
+				continue
+			deadline = getdate(task.deadline)
+			if deadline < today_date:
+				days_overdue = date_diff(today_date, deadline)
+				queue.append({
+					"task_id": task.name,
+					"task_title": task.task_name,
+					"deadline": str(task.deadline),
+					"days_overdue": days_overdue,
+				})
+		queue.sort(key=lambda t: t["days_overdue"], reverse=True)
+
+	if not queue:
+		send_reply(to_number, "✅ No overdue tasks! Great job staying on track! 🎉", whatsapp_account)
+		return
+
+	context = {
+		"queue": queue,
+		"done": 0,
+		"skipped": 0,
+		"total": len(queue),
+	}
+	set_context(to_number, "overdue_review", context)
+
+	# Send plain text list of all overdue tasks before starting the one-by-one review
+	tasks_text = f"🔴 *You have {len(queue)} overdue task{'s' if len(queue) > 1 else ''}:*\n\n"
+	for i, task in enumerate(queue, 1):
+		days = task["days_overdue"]
+		d_text = f"{days} day{'s' if days != 1 else ''} overdue"
+		tasks_text += f"{i}. {task['task_title']} ({d_text})\n"
+	send_reply(to_number, tasks_text, whatsapp_account)
+
+	_show_overdue_task_prompt(to_number, context, whatsapp_account)
+
+
+def _show_overdue_task_prompt(to_number, context, whatsapp_account):
+	"""Show the current overdue task with Mark Done / Next Task / Change Deadline buttons."""
+	queue = context["queue"]
+	done = context["done"]
+	total = context["total"]
+
+	if not queue:
+		_show_overdue_review_summary(to_number, done, context["skipped"], total, whatsapp_account)
+		return
+
+	task = queue[0]
+	reviewed = total - len(queue)
+	days = task["days_overdue"]
+	days_text = f"{days} day{'s' if days > 1 else ''} overdue"
+
+	message_body = (
+		f"🔴 *Overdue Task* ({reviewed + 1} of {total})\n\n"
+		f"*{task['task_title']}*\n"
+		f"📅 {days_text}\n\n"
+		f"What would you like to do?"
+	)
+
+	buttons = [
+		{"id": "OVERDUE_MARK_DONE", "title": "✅ Mark as Done"},
+		{"id": "OVERDUE_NEXT_TASK", "title": "⏭️ Next Task"},
+		{"id": "OVERDUE_CHANGE_DEADLINE", "title": "📅 Change Deadline"},
+	]
+	send_interactive_message(to_number, message_body, buttons, whatsapp_account)
+
+
+def _show_overdue_review_summary(to_number, done, skipped, total, whatsapp_account):
+	"""Show summary message when the overdue review queue is exhausted."""
+	clear_context(to_number)
+
+	msg = "✅ *Overdue Review Complete!*\n\n"
+	if done > 0:
+		msg += f"✅ {done} task{'s' if done > 1 else ''} marked as done\n"
+	if skipped > 0:
+		msg += f"⏭️ {skipped} task{'s' if skipped > 1 else ''} skipped\n"
+
+	if done == total:
+		msg += "\n🎉 All overdue tasks cleared! Great work!"
+	elif skipped > 0:
+		msg += "\n💡 Type `overdue` anytime to review remaining tasks."
+
+	send_reply(to_number, msg, whatsapp_account)
+
+
+def handle_overdue_mark_done(from_number, whatsapp_account):
+	"""Handle 'Mark as Done' button press in overdue review flow."""
+	context = get_context_data(from_number, "overdue_review")
+	if not context or not context.get("queue"):
+		send_reply(from_number, "❌ No active review. Type `overdue` to start.", whatsapp_account)
+		return
+
+	queue = context["queue"]
+	task = queue.pop(0)
+
+	frappe.db.set_value("Sprint Board", task["task_id"], "status", "Completed")
+	frappe.db.set_value("Sprint Board", task["task_id"], "completed_date", today())
+	frappe.db.commit()
+
+	context["queue"] = queue
+	context["done"] += 1
+	set_context(from_number, "overdue_review", context)
+
+	send_reply(from_number, f"✅ *{task['task_title']}* marked as done!", whatsapp_account)
+	_show_overdue_task_prompt(from_number, context, whatsapp_account)
+
+
+def handle_overdue_next_task(from_number, whatsapp_account):
+	"""Handle 'Next Task' button press in overdue review flow."""
+	context = get_context_data(from_number, "overdue_review")
+	if not context or not context.get("queue"):
+		send_reply(from_number, "❌ No active review. Type `overdue` to start.", whatsapp_account)
+		return
+
+	queue = context["queue"]
+	queue.pop(0)
+	context["queue"] = queue
+	context["skipped"] += 1
+	set_context(from_number, "overdue_review", context)
+
+	_show_overdue_task_prompt(from_number, context, whatsapp_account)
+
+
+def handle_overdue_change_deadline(from_number, whatsapp_account):
+	"""Handle 'Change Deadline' button in overdue review flow."""
+	from ..date_utils import format_date_display
+
+	context = get_context_data(from_number, "overdue_review")
+	if not context or not context.get("queue"):
+		send_reply(from_number, "❌ No active review. Type `overdue` to start.", whatsapp_account)
+		return
+
+	queue = context["queue"]
+	task = queue[0]
+	task_id = task["task_id"]
+
+	task_data = frappe.db.get_value(
+		"Sprint Board",
+		task_id,
+		["task_name", "deadline"],
+		as_dict=True
+	)
+
+	if not task_data:
+		send_reply(from_number, "❌ Task not found.", whatsapp_account)
+		return
+
+	# Mark context as editing deadline so deadline input is routed here
+	context["editing_deadline"] = True
+	set_context(from_number, "overdue_review", context)
+
+	current_deadline = task_data.deadline
+	deadline_display = format_date_display(current_deadline) if current_deadline else "Not set"
+
+	buttons = [
+		{"id": "DEADLINE_TODAY", "title": "📅 Today"},
+		{"id": "DEADLINE_TOMORROW", "title": "📅 Tomorrow"},
+	]
+
+	message_body = (
+		f"📋 *Task:* {task_data.task_name}\n"
+		f"📅 *Current Deadline:* {deadline_display}\n\n"
+		f"Select new deadline or type a date:\n\n"
+		f"💡 _Examples: `next friday`, `Feb 15`, `in 3 days`_"
+	)
+
+	send_interactive_message(from_number, message_body, buttons, whatsapp_account)
+
+
 def send_task_list(to_number, tasks, whatsapp_account, is_initial=False):
     """Send the task list as an interactive message (for overdue alerts)"""
     

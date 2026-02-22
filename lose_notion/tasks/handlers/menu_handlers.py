@@ -7,7 +7,7 @@ import json
 from ..whatsapp_utils import send_reply, send_typing_indicator, send_interactive_message
 from ..user_utils import get_user_by_phone
 from ..date_utils import get_days_text
-from .task_handlers import send_task_list_with_numbers
+from .task_handlers import send_task_list_with_numbers, send_overdue_review_flow
 
 # Constants
 MENU_TRIGGERS = ['menu', 'help', 'start']
@@ -398,83 +398,10 @@ def send_today_tasks(to_number, assigned_to, whatsapp_account):
 
 
 def send_overdue_tasks(to_number, assigned_to, whatsapp_account):
-    """Send overdue tasks (deadline < today, not Completed or On Hold) with status counts"""
-    from frappe.utils import getdate, today, date_diff
-    
-    send_typing_indicator(to_number, whatsapp_account)
-    
+    """Start the one-by-one overdue task review flow for the user."""
     try:
-        today_date = getdate(today())
-        
-        # Get all incomplete tasks (excluding On Hold for overdue filter)
-        all_tasks = frappe.get_all(
-            "Sprint Board",
-            filters={
-                "status": ["!=", "Completed"],
-                "assigned_to": assigned_to
-            },
-            fields=["name", "task_name", "deadline", "status"]
-        )
-        
-        # Filter overdue tasks and compute status counts
-        task_list = []
-        status_counts = {
-            "not_started": 0,
-            "in_progress": 0,
-            "overdue": 0,
-            "on_hold": 0
-        }
-        
-        for task in all_tasks:
-            # Check if task is overdue
-            is_overdue = task.deadline and getdate(task.deadline) < today_date
-            
-            # Count all statuses
-            if task.status == "On Hold":
-                status_counts["on_hold"] += 1
-            elif is_overdue:
-                status_counts["overdue"] += 1
-            elif task.status == "Not Started":
-                status_counts["not_started"] += 1
-            elif task.status == "In Progress":
-                status_counts["in_progress"] += 1
-            
-            # Only add to task list if overdue and not On Hold
-            if is_overdue and task.status != "On Hold":
-                days_overdue = date_diff(today_date, getdate(task.deadline))
-                days_text = f"{days_overdue} day{'s' if days_overdue > 1 else ''} overdue"
-                task_list.append({
-                    "task_id": task.name,
-                    "task_title": task.task_name,
-                    "days_text": days_text,
-                    "status": task.status,
-                    "deadline": task.deadline
-                })
-        
-        if not task_list:
-            send_reply(
-                to_number,
-                "✅ No overdue tasks! Great job staying on track! 🎉",
-                whatsapp_account
-            )
-            return
-        
-        # Sort by most overdue first
-        def sort_key(t):
-            if not t["deadline"]:
-                return "0000-00-00"
-            return str(getdate(t["deadline"]))
-        
-        task_list.sort(key=sort_key)
-        
-        send_task_list_with_numbers(
-            to_number, task_list, whatsapp_account, 
-            "🔴 Overdue Tasks", 
-            status_counts=status_counts,
-            exclude_status="overdue"
-        )
-        
+        send_overdue_review_flow(to_number, assigned_to, whatsapp_account)
     except Exception as e:
-        frappe.log_error(f"Error sending overdue tasks: {str(e)}", "Task Alert Error")
+        frappe.log_error(f"Error starting overdue review: {str(e)}", "Task Alert Error")
         send_reply(to_number, "❌ An error occurred. Please try again.", whatsapp_account)
 
