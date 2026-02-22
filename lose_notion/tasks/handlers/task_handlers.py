@@ -7,7 +7,7 @@ import json
 
 from ..whatsapp_utils import send_reply, send_typing_indicator, send_interactive_message
 from ..date_utils import get_days_text
-from ..context_storage import get_context_data, set_context
+from ..context_storage import get_context_data, set_context, clear_context
 
 # Constants
 MAX_WHATSAPP_LIST_ITEMS = 10
@@ -146,9 +146,10 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
         )
         
         if not remaining:
+            clear_context(to_number)
             send_reply(
-                to_number, 
-                "🎉 *All tasks completed!*\n\nYou're all caught up!", 
+                to_number,
+                "🎉 *All tasks completed!*\n\nYou're all caught up!",
                 whatsapp_account
             )
             return
@@ -186,6 +187,7 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
             })
         
         if not task_list:
+            clear_context(to_number)
             msg = "✅ No active tasks remaining!"
             if status_counts["on_hold"] > 0:
                 msg += f"\n\n🟠 {status_counts['on_hold']} task{'s' if status_counts['on_hold'] > 1 else ''} on hold"
