@@ -10,7 +10,16 @@ import json
 
 from .whatsapp_utils import mark_as_read, send_reply, send_interactive_message
 from .user_utils import get_user_by_phone
-from .handlers.menu_handlers import handle_menu_trigger, handle_status_filter_trigger
+from .handlers.menu_handlers import (
+    handle_menu_trigger,
+    handle_status_filter_trigger,
+    handle_more_options,
+    send_dashboard,
+    send_guide,
+    send_today_tasks,
+    send_overdue_tasks,
+    send_filtered_tasks,
+)
 from .handlers.task_handlers import (
     handle_task_selection,
     handle_status_update,
@@ -216,7 +225,52 @@ def _handle_button_message(message, from_number, whatsapp_account):
         else:
             send_reply(from_number, "❌ Your phone number is not linked to any user account.", whatsapp_account)
         return
-    
+
+    if message == "MENU_MORE_OPTIONS":
+        handle_more_options(from_number, whatsapp_account)
+        return
+
+    # More Options submenu handlers
+    if message == "MENU_DASHBOARD":
+        send_dashboard(from_number, whatsapp_account)
+        return
+
+    if message == "MENU_GUIDE":
+        send_guide(from_number, whatsapp_account)
+        return
+
+    if message == "MENU_TODAY":
+        current_user = get_user_by_phone(from_number)
+        if current_user:
+            send_today_tasks(from_number, current_user["name"], whatsapp_account)
+        else:
+            send_reply(from_number, "❌ Your phone number is not linked to any user account.", whatsapp_account)
+        return
+
+    if message == "MENU_OVERDUE":
+        current_user = get_user_by_phone(from_number)
+        if current_user:
+            send_overdue_tasks(from_number, current_user["name"], whatsapp_account)
+        else:
+            send_reply(from_number, "❌ Your phone number is not linked to any user account.", whatsapp_account)
+        return
+
+    if message == "MENU_NOT_STARTED":
+        current_user = get_user_by_phone(from_number)
+        if current_user:
+            send_filtered_tasks(from_number, current_user["name"], "Not Started", whatsapp_account)
+        else:
+            send_reply(from_number, "❌ Your phone number is not linked to any user account.", whatsapp_account)
+        return
+
+    if message == "MENU_ON_HOLD":
+        current_user = get_user_by_phone(from_number)
+        if current_user:
+            send_filtered_tasks(from_number, current_user["name"], "On Hold", whatsapp_account)
+        else:
+            send_reply(from_number, "❌ Your phone number is not linked to any user account.", whatsapp_account)
+        return
+
     # Task status update flow
     if message.startswith("SELECT_TASK:"):
         task_id = message.replace("SELECT_TASK:", "").strip()

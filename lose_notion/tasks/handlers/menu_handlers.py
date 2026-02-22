@@ -12,6 +12,7 @@ from .task_handlers import send_task_list_with_numbers, send_overdue_review_flow
 # Constants
 MENU_TRIGGERS = ['menu', 'help', 'start']
 GUIDE_TRIGGER = 'guide'
+DASHBOARD_TRIGGER = 'dashboard'
 
 STATUS_FILTER_TRIGGERS = {
     'not started': 'Not Started',
@@ -45,7 +46,8 @@ def handle_menu_trigger(message, from_number, whatsapp_account):
     
     buttons = [
         {"id": "MENU_ADD_TASK", "title": "➕ Add Tasks"},
-        {"id": "MENU_MY_TASKS", "title": "📋 My Tasks"}
+        {"id": "MENU_MY_TASKS", "title": "📋 My Tasks"},
+        {"id": "MENU_MORE_OPTIONS", "title": "🔍 More Options"},
     ]
     
     message_body = (
@@ -75,7 +77,12 @@ def handle_status_filter_trigger(message, from_number, whatsapp_account):
     if message_lower == GUIDE_TRIGGER:
         send_guide(from_number, whatsapp_account)
         return True
-    
+
+    # Handle dashboard trigger (doesn't need user account)
+    if message_lower == DASHBOARD_TRIGGER:
+        send_dashboard(from_number, whatsapp_account)
+        return True
+
     current_user = get_user_by_phone(from_number)
     if not current_user:
         # Only return True if it's a valid trigger
@@ -403,5 +410,90 @@ def send_overdue_tasks(to_number, assigned_to, whatsapp_account):
         send_overdue_review_flow(to_number, assigned_to, whatsapp_account)
     except Exception as e:
         frappe.log_error(f"Error starting overdue review: {str(e)}", "Task Alert Error")
+        send_reply(to_number, "❌ An error occurred. Please try again.", whatsapp_account)
+
+
+def handle_more_options(to_number, whatsapp_account):
+    """Send More Options submenu as an interactive list"""
+    send_typing_indicator(to_number, whatsapp_account)
+
+    buttons = [
+        {"id": "MENU_DASHBOARD", "title": "📊 Dashboard", "description": "Top task completers this month"},
+        {"id": "MENU_GUIDE", "title": "📖 Guide", "description": "How to use this bot"},
+        {"id": "MENU_TODAY", "title": "📅 Today", "description": "Tasks due today"},
+        {"id": "MENU_OVERDUE", "title": "🔴 Overdue", "description": "Review overdue tasks"},
+        {"id": "MENU_NOT_STARTED", "title": "⚫ Not Started", "description": "Tasks not yet started"},
+        {"id": "MENU_ON_HOLD", "title": "🟠 On Hold", "description": "Tasks on hold"},
+    ]
+
+    send_interactive_message(to_number, "🔍 *More Options*\n\nWhat would you like to see?", buttons, whatsapp_account)
+
+
+def send_dashboard(to_number, whatsapp_account):
+    """Send top 10 employees with most completed tasks this month"""
+    from frappe.utils import get_first_day, get_last_day, getdate, today
+    from collections import Counter
+
+    send_typing_indicator(to_number, whatsapp_account)
+
+    try:
+        today_date = getdate(today())
+        first_day = get_first_day(today_date)
+        last_day = get_last_day(today_date)
+        month_name = today_date.strftime("%B %Y")
+
+        # Get users with Task User or Task Admin role
+        task_users = frappe.get_all(
+            "Has Role",
+            filters={"role": ["in", ["Task User", "Task Admin"]], "parenttype": "User"},
+            fields=["parent"],
+            distinct=True,
+        )
+        user_list = [u["parent"] for u in task_users]
+
+        if not user_list:
+            send_reply(to_number, f"📊 *Dashboard - {month_name}*\n\nNo users with task roles found.", whatsapp_account)
+            return
+
+        # Get completed tasks this month assigned to task role users
+        completed_tasks = frappe.get_all(
+            "Sprint Board",
+            filters={
+                "status": "Completed",
+                "completed_date": ["between", [first_day, last_day]],
+                "assigned_to": ["in", user_list],
+            },
+            fields=["assigned_to"],
+        )
+
+        if not completed_tasks:
+            send_reply(
+                to_number,
+                f"📊 *Dashboard - {month_name}*\n\nNo completed tasks this month yet.",
+                whatsapp_account,
+            )
+            return
+
+        # Count completions per user and take top 10
+        user_counts = Counter(task["assigned_to"] for task in completed_tasks)
+        top_10 = user_counts.most_common(10)
+
+        medals = ["🥇", "🥈", "🥉"]
+        lines = [
+            f"📊 *Dashboard - {month_name}*",
+            "━━━━━━━━━━━━━━━━━━━━━━",
+            f"*Top {len(top_10)} Task Completers*\n",
+        ]
+
+        for rank, (user, count) in enumerate(top_10, 1):
+            full_name = frappe.db.get_value("User", user, "full_name") or user
+            prefix = medals[rank - 1] if rank <= 3 else f"{rank}."
+            task_word = "task" if count == 1 else "tasks"
+            lines.append(f"{prefix} {full_name} — {count} {task_word}")
+
+        send_reply(to_number, "\n".join(lines), whatsapp_account)
+
+    except Exception as e:
+        frappe.log_error(f"Error sending dashboard: {str(e)}", "Dashboard Error")
         send_reply(to_number, "❌ An error occurred. Please try again.", whatsapp_account)
 
