@@ -79,7 +79,7 @@ def send_overdue_task_alerts():
             "deadline": ["<", today_date],
             "assigned_to": ["is", "set"]
         },
-        fields=["name", "task_name", "deadline", "status", "assigned_to", "last_alerted"]
+        fields=["name", "task_name", "deadline", "status", "assigned_to", "last_alerted", "priority"]
     )
     
     if not overdue_tasks:
@@ -102,7 +102,8 @@ def send_overdue_task_alerts():
             "task_title": task.task_name,
             "days_overdue": days_overdue,
             "deadline": str(task.deadline),
-            "status": task.status
+            "status": task.status,
+            "priority": task.priority or ""
         })
     
     for user, tasks in user_tasks.items():

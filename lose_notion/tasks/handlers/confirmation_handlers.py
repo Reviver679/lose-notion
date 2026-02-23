@@ -28,19 +28,22 @@ def show_task_confirmation(tasks, from_number, whatsapp_account, show_add_anothe
             "task_name": task["task_name"],
             "deadline": str(task["deadline"]),
             "assignee": task["assignee"],
-            "assignee_display": task["assignee_display"]
+            "assignee_display": task["assignee_display"],
+            "priority": task.get("priority", "")
         })
-    
+
     # Store in database instead of cache
     set_context(from_number, "pending_tasks", serializable_tasks)
-    
+
     task_list = ""
     for idx, task in enumerate(tasks, 1):
         deadline = task["deadline"]
         if isinstance(deadline, str):
             deadline = getdate(deadline)
         deadline_display = format_date_display(deadline)
-        task_list += f"{idx}. {task['task_name']}\n   📅 {deadline_display} | 👤 {task['assignee_display']}\n\n"
+        priority = task.get("priority", "")
+        priority_display = f" | 🚩 {priority}" if priority else ""
+        task_list += f"{idx}. {task['task_name']}\n   📅 {deadline_display} | 👤 {task['assignee_display']}{priority_display}\n\n"
     
     message = (
         f"📝 *Creating {len(tasks)} task{'s' if len(tasks) > 1 else ''}:*\n\n"
@@ -95,6 +98,7 @@ def handle_task_confirmation(action, from_number, whatsapp_account):
                     "status": "Not Started",
                     "assigned_to": task["assignee"],
                     "deadline": deadline,
+                    "priority": task.get("priority", ""),
                     "created_by": created_by,
                     "created_on": now_datetime()
                 })

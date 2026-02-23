@@ -26,6 +26,13 @@ STATUS_DISPLAY = {
     "On Hold": "🟠 On Hold"
 }
 
+PRIORITY_ORDER = {"High": 0, "Medium": 1, "Low": 2, "": 3}
+
+
+def get_priority_prefix(priority):
+	"""Return 🚩 prefix for High priority tasks, empty string for others"""
+	return "🚩 " if priority == "High" else ""
+
 
 def get_status_emoji(status):
     """Get emoji for status"""
@@ -142,7 +149,7 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
                 "status": ["!=", "Completed"],
                 "assigned_to": assigned_to
             },
-            fields=["name", "task_name", "deadline", "status"]
+            fields=["name", "task_name", "deadline", "status", "priority"]
         )
         
         if not remaining:
@@ -183,9 +190,10 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
                 "task_title": task.task_name,
                 "days_text": days_text,
                 "status": task.status,
-                "deadline": task.deadline
+                "deadline": task.deadline,
+                "priority": task.priority or ""
             })
-        
+
         if not task_list:
             clear_context(to_number)
             msg = "✅ No active tasks remaining!"
@@ -193,17 +201,18 @@ def send_remaining_tasks(to_number, assigned_to, whatsapp_account):
                 msg += f"\n\n🟠 {status_counts['on_hold']} task{'s' if status_counts['on_hold'] > 1 else ''} on hold"
             send_reply(to_number, msg, whatsapp_account)
             return
-        
-        # Sort: overdue first, then by deadline
+
+        # Sort: priority first, then overdue, then by deadline
         def sort_key(t):
+            priority_rank = PRIORITY_ORDER.get(t.get("priority") or "", 3)
             if not t["deadline"]:
-                return (1, "9999-99-99")
+                return (priority_rank, 1, "9999-99-99")
             deadline = getdate(t["deadline"])
             is_overdue = deadline < today_date
-            return (0 if is_overdue else 1, str(deadline))
-        
+            return (priority_rank, 0 if is_overdue else 1, str(deadline))
+
         task_list.sort(key=sort_key)
-        
+
         send_task_list_with_numbers(to_number, task_list, whatsapp_account, "Remaining Tasks", status_counts=status_counts)
             
     except Exception as e:
@@ -226,7 +235,7 @@ def send_my_tasks(to_number, assigned_to, whatsapp_account):
                 "status": ["!=", "Completed"],
                 "assigned_to": assigned_to
             },
-            fields=["name", "task_name", "deadline", "status"]
+            fields=["name", "task_name", "deadline", "status", "priority"]
         )
         
         if not tasks:
@@ -257,32 +266,34 @@ def send_my_tasks(to_number, assigned_to, whatsapp_account):
                 status_counts["in_progress"] += 1
             
             days_text = get_days_text(task.deadline, today_date)
-            
+
             my_tasks.append({
                 "task_id": task.name,
                 "task_title": task.task_name,
                 "days_text": days_text,
                 "status": task.status,
-                "deadline": task.deadline
+                "deadline": task.deadline,
+                "priority": task.priority or ""
             })
-        
+
         if not my_tasks:
             msg = "✅ No active tasks!"
             if status_counts["on_hold"] > 0:
                 msg += f"\n\n🟠 {status_counts['on_hold']} task{'s' if status_counts['on_hold'] > 1 else ''} on hold"
             send_reply(to_number, msg, whatsapp_account)
             return
-        
-        # Sort: overdue first, then by deadline
+
+        # Sort: priority first, then overdue, then by deadline
         def sort_key(t):
+            priority_rank = PRIORITY_ORDER.get(t.get("priority") or "", 3)
             if not t["deadline"]:
-                return (1, "9999-99-99")
+                return (priority_rank, 1, "9999-99-99")
             deadline = getdate(t["deadline"])
             is_overdue = deadline < today_date
-            return (0 if is_overdue else 1, str(deadline))
-        
+            return (priority_rank, 0 if is_overdue else 1, str(deadline))
+
         my_tasks.sort(key=sort_key)
-        
+
         send_task_list_with_numbers(to_number, my_tasks, whatsapp_account, "Your Pending Tasks", status_counts=status_counts)
         
     except Exception as e:
@@ -392,7 +403,8 @@ def send_task_list_with_numbers(to_number, task_list, whatsapp_account, header_t
             "task_id": task["task_id"],
             "task_title": task["task_title"][:35],  # Truncate to save space
             "days_text": task["days_text"],
-            "status": task["status"]
+            "status": task["status"],
+            "priority": task.get("priority", "")
         })
     
     # Store all task list data in a single consolidated context
@@ -472,10 +484,11 @@ def _send_paginated_task_list(to_number, task_list, whatsapp_account, header_tex
     # Show all tasks in body (numbered from 1), but only current page in buttons
     for idx, task in enumerate(task_list, 1):
         status_emoji = get_status_emoji(task["status"])
-        
+        priority_prefix = get_priority_prefix(task.get("priority", ""))
+
         # Only include first MAX_TASKS_IN_BODY tasks in the body text
         if idx <= MAX_TASKS_IN_BODY:
-            task_list_text += f"{idx}. {task['task_title'][:35]} ({task['days_text']}) {status_emoji}\n"
+            task_list_text += f"{idx}. {priority_prefix}{task['task_title'][:35]} ({task['days_text']}) {status_emoji}\n"
     
     # Add indicator if there are more tasks not shown in body
     if total_tasks > MAX_TASKS_IN_BODY:
@@ -509,7 +522,8 @@ def _send_paginated_task_list(to_number, task_list, whatsapp_account, header_tex
         for idx in range(start_idx, end_idx):
             task = task_list[idx]
             status_emoji = get_status_emoji(task["status"])
-            message_body += f"{idx + 1}. {task['task_title'][:35]} ({task['days_text']}) {status_emoji}\n"
+            priority_prefix = get_priority_prefix(task.get("priority", ""))
+            message_body += f"{idx + 1}. {priority_prefix}{task['task_title'][:35]} ({task['days_text']}) {status_emoji}\n"
         message_body += "\n"
     
     # Add instructions
@@ -547,8 +561,9 @@ def send_overdue_review_flow(to_number, assigned_to, whatsapp_account, prefetche
 				"task_title": t["task_title"],
 				"deadline": t.get("deadline", ""),
 				"days_overdue": t["days_overdue"],
+				"priority": t.get("priority", ""),
 			})
-		queue.sort(key=lambda t: t["days_overdue"], reverse=True)
+		queue.sort(key=lambda t: (PRIORITY_ORDER.get(t.get("priority") or "", 3), -t["days_overdue"]))
 	else:
 		today_date = getdate(today())
 		overdue_tasks = frappe.get_all(
@@ -557,7 +572,7 @@ def send_overdue_review_flow(to_number, assigned_to, whatsapp_account, prefetche
 				"status": ["not in", ["Completed", "On Hold"]],
 				"assigned_to": assigned_to,
 			},
-			fields=["name", "task_name", "deadline", "status"],
+			fields=["name", "task_name", "deadline", "status", "priority"],
 		)
 		queue = []
 		for task in overdue_tasks:
@@ -571,8 +586,9 @@ def send_overdue_review_flow(to_number, assigned_to, whatsapp_account, prefetche
 					"task_title": task.task_name,
 					"deadline": str(task.deadline),
 					"days_overdue": days_overdue,
+					"priority": task.priority or "",
 				})
-		queue.sort(key=lambda t: t["days_overdue"], reverse=True)
+		queue.sort(key=lambda t: (PRIORITY_ORDER.get(t.get("priority") or "", 3), -t["days_overdue"]))
 
 	if not queue:
 		send_reply(to_number, "✅ No overdue tasks! Great job staying on track! 🎉", whatsapp_account)
@@ -611,18 +627,19 @@ def _show_overdue_task_prompt(to_number, context, whatsapp_account):
 	reviewed = total - len(queue)
 	days = task["days_overdue"]
 	days_text = f"{days} day{'s' if days > 1 else ''} overdue"
+	priority_prefix = get_priority_prefix(task.get("priority", ""))
 
 	message_body = (
 		f"🔴 *Overdue Task* ({reviewed + 1} of {total})\n\n"
-		f"*{task['task_title']}*\n"
+		f"{priority_prefix}*{task['task_title']}*\n"
 		f"📅 {days_text}\n\n"
 		f"What would you like to do?"
 	)
 
 	buttons = [
 		{"id": "OVERDUE_MARK_DONE", "title": "✅ Mark as Done"},
-		{"id": "OVERDUE_NEXT_TASK", "title": "⏭️ Next Task"},
 		{"id": "OVERDUE_CHANGE_DEADLINE", "title": "📅 Change Deadline"},
+		{"id": "OVERDUE_NEXT_TASK", "title": "⏭️ Next Task"},
 	]
 	send_interactive_message(to_number, message_body, buttons, whatsapp_account)
 

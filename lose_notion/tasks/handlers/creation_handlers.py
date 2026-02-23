@@ -14,6 +14,7 @@ from .confirmation_handlers import show_task_confirmation, handle_ambiguous_user
 # Constants
 TASK_CREATE_TRIGGERS = ['add tasks', 'add task', 'new task', 'new tasks', 'new']
 MY_TASKS_TRIGGERS = ['my tasks', 'my task', 'my']
+PRIORITY_KEYWORDS = {"high", "medium", "low"}
 
 
 # ============================================
@@ -63,21 +64,25 @@ def parse_task_line(line):
     task_name = parts[0] if parts else ""
     deadline_str = None
     assignee_str = None
-    
+    priority_str = ""
+
     for part in parts[1:]:
         part = part.strip()
-        if part.startswith('@'):
+        if part.lower() in PRIORITY_KEYWORDS:
+            priority_str = part.title()  # Normalize to "High", "Medium", "Low"
+        elif part.startswith('@'):
             assignee_str = part[1:]
         elif _looks_like_assignee(part):
             # If it doesn't look like a date, treat as assignee
             assignee_str = part
         else:
             deadline_str = part
-    
+
     return {
         "task_name": task_name,
         "deadline_str": deadline_str,
-        "assignee_str": assignee_str
+        "assignee_str": assignee_str,
+        "priority": priority_str
     }
 
 
@@ -186,16 +191,17 @@ def handle_task_creation_trigger(message, from_number, whatsapp_account):
             "task_name": parsed["task_name"],
             "deadline": deadline,
             "assignee": assignee,
-            "assignee_display": assignee_display
+            "assignee_display": assignee_display,
+            "priority": parsed.get("priority", "")
         })
-    
+
     if needs_user_confirmation:
         handle_ambiguous_users(needs_user_confirmation[0], from_number, whatsapp_account, parsed_tasks, needs_user_confirmation[1:])
         return True
-    
+
     if parsed_tasks:
         show_task_confirmation(parsed_tasks, from_number, whatsapp_account)
-    
+
     return True
 
 
@@ -204,17 +210,17 @@ def send_format_sample(to_number, whatsapp_account):
     message = (
         "📝 *Create New Tasks*\n\n"
         "Send task names, one per line:\n"
-        "`task name ... deadline ... assignee`\n"
+        "`task name ... deadline ... assignee ... priority`\n"
         "_or use | as separator_\n\n"
         "*Examples:*\n"
         "```\n"
         "new\n"
-        "Fix login bug\n"
-        "Update dashboard ... tomorrow\n"
-        "Review PR ... Feb 10 ... Raj\n"
+        "Fix login bug ... tomorrow ... High\n"
+        "Update dashboard ... Feb 10\n"
+        "Review PR ... next week ... Raj ... Medium\n"
         "```\n\n"
-        "📅 Deadline & 👤 assignee are optional.\n"
-        "Defaults: Today, assigned to you."
+        "📅 Deadline, 👤 assignee & 🚩 priority are optional.\n"
+        "Defaults: Today, assigned to you, no priority."
     )
     send_reply(to_number, message, whatsapp_account)
 
@@ -298,18 +304,19 @@ def handle_pending_task_input(message, from_number, whatsapp_account):
             "task_name": parsed["task_name"],
             "deadline": deadline,
             "assignee": assignee,
-            "assignee_display": assignee_display
+            "assignee_display": assignee_display,
+            "priority": parsed.get("priority", "")
         })
-    
+
     if needs_user_confirmation:
         handle_ambiguous_users(needs_user_confirmation[0], from_number, whatsapp_account, parsed_tasks, needs_user_confirmation[1:])
         return True
-    
+
     if parsed_tasks:
         show_task_confirmation(parsed_tasks, from_number, whatsapp_account)
     else:
         send_reply(from_number, "❌ No valid tasks found. Please try again.", whatsapp_account)
-    
+
     return True
 
 

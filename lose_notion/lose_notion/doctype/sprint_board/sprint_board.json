@@ -8,6 +8,7 @@
  "field_order": [
   "task_name",
   "status",
+  "priority",
   "column_break_1",
   "assigned_to",
   "created_by",
@@ -43,6 +44,14 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Not Started\nIn Progress\nCompleted\nOn Hold"
+  },
+  {
+   "fieldname": "priority",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Priority",
+   "options": "\nHigh\nMedium\nLow"
   },
   {
    "fieldname": "deadline",
@@ -89,7 +98,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-02 11:00:00.000000",
+ "modified": "2026-02-23 11:00:00.000000",
  "modified_by": "Administrator",
  "module": "Lose Notion",
  "name": "Sprint Board",

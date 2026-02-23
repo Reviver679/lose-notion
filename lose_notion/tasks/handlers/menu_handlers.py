@@ -7,7 +7,7 @@ import json
 from ..whatsapp_utils import send_reply, send_typing_indicator, send_interactive_message
 from ..user_utils import get_user_by_phone
 from ..date_utils import get_days_text
-from .task_handlers import send_task_list_with_numbers, send_overdue_review_flow
+from .task_handlers import send_task_list_with_numbers, send_overdue_review_flow, PRIORITY_ORDER
 
 # Constants
 MENU_TRIGGERS = ['menu', 'help', 'start']
@@ -251,9 +251,9 @@ def send_filtered_tasks(to_number, assigned_to, status, whatsapp_account):
                 "status": ["!=", "Completed"],
                 "assigned_to": assigned_to
             },
-            fields=["name", "task_name", "deadline", "status"]
+            fields=["name", "task_name", "deadline", "status", "priority"]
         )
-        
+
         # Filter tasks and compute status counts
         task_list = []
         status_counts = {
@@ -262,11 +262,11 @@ def send_filtered_tasks(to_number, assigned_to, status, whatsapp_account):
             "overdue": 0,
             "on_hold": 0
         }
-        
+
         for task in all_tasks:
             # Check if task is overdue
             is_overdue = task.deadline and getdate(task.deadline) < today_date
-            
+
             # Count all statuses
             if task.status == "On Hold":
                 status_counts["on_hold"] += 1
@@ -276,7 +276,7 @@ def send_filtered_tasks(to_number, assigned_to, status, whatsapp_account):
                 status_counts["not_started"] += 1
             elif task.status == "In Progress":
                 status_counts["in_progress"] += 1
-            
+
             # Only add to task list if matches filter
             if task.status == status:
                 days_text = get_days_text(task.deadline, today_date)
@@ -285,9 +285,10 @@ def send_filtered_tasks(to_number, assigned_to, status, whatsapp_account):
                     "task_title": task.task_name,
                     "days_text": days_text,
                     "status": task.status,
-                    "deadline": task.deadline
+                    "deadline": task.deadline,
+                    "priority": task.priority or ""
                 })
-        
+
         if not task_list:
             send_reply(
                 to_number,
@@ -295,12 +296,13 @@ def send_filtered_tasks(to_number, assigned_to, status, whatsapp_account):
                 whatsapp_account
             )
             return
-        
-        # Sort by deadline
+
+        # Sort: priority first, then by deadline
         def sort_key(t):
+            priority_rank = PRIORITY_ORDER.get(t.get("priority") or "", 3)
             if not t["deadline"]:
-                return "9999-99-99"
-            return str(getdate(t["deadline"]))
+                return (priority_rank, "9999-99-99")
+            return (priority_rank, str(getdate(t["deadline"])))
         
         task_list.sort(key=sort_key)
         
@@ -340,9 +342,9 @@ def send_today_tasks(to_number, assigned_to, whatsapp_account):
                 "status": ["!=", "Completed"],
                 "assigned_to": assigned_to
             },
-            fields=["name", "task_name", "deadline", "status"]
+            fields=["name", "task_name", "deadline", "status", "priority"]
         )
-        
+
         # Filter tasks due today and compute status counts
         task_list = []
         status_counts = {
@@ -351,12 +353,12 @@ def send_today_tasks(to_number, assigned_to, whatsapp_account):
             "overdue": 0,
             "on_hold": 0
         }
-        
+
         for task in all_tasks:
             # Check if task is overdue or due today
             is_today = task.deadline and getdate(task.deadline) == today_date
             is_overdue = task.deadline and getdate(task.deadline) < today_date
-            
+
             # Count all statuses
             if task.status == "On Hold":
                 status_counts["on_hold"] += 1
@@ -366,7 +368,7 @@ def send_today_tasks(to_number, assigned_to, whatsapp_account):
                 status_counts["not_started"] += 1
             elif task.status == "In Progress":
                 status_counts["in_progress"] += 1
-            
+
             # Only add to task list if due today (and not On Hold)
             if is_today and task.status != "On Hold":
                 days_text = get_days_text(task.deadline, today_date)
@@ -375,9 +377,10 @@ def send_today_tasks(to_number, assigned_to, whatsapp_account):
                     "task_title": task.task_name,
                     "days_text": days_text,
                     "status": task.status,
-                    "deadline": task.deadline
+                    "deadline": task.deadline,
+                    "priority": task.priority or ""
                 })
-        
+
         if not task_list:
             send_reply(
                 to_number,
@@ -385,11 +388,12 @@ def send_today_tasks(to_number, assigned_to, whatsapp_account):
                 whatsapp_account
             )
             return
-        
-        # Sort by status (In Progress first, then Not Started)
+
+        # Sort: priority first, then by status (In Progress first, then Not Started)
         def sort_key(t):
+            priority_rank = PRIORITY_ORDER.get(t.get("priority") or "", 3)
             status_order = {"In Progress": 0, "Not Started": 1}
-            return status_order.get(t["status"], 2)
+            return (priority_rank, status_order.get(t["status"], 2))
         
         task_list.sort(key=sort_key)
         
