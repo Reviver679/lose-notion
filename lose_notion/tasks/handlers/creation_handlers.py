@@ -354,27 +354,29 @@ def handle_menu_add_task(from_number, whatsapp_account):
 def handle_guided_flow_input(message, from_number, whatsapp_account):
     """Handle text input in guided flow"""
     context_data = get_context_data(from_number, "guided_flow")
-    
+
     if not context_data:
         return False
-    
+
     step = context_data.get("step")
     if not step:
         return False
-    
+
     # Handle cancel at any step
     if message.strip().lower() == 'cancel':
         clear_context(from_number)
         send_reply(from_number, "❌ Task creation cancelled.", whatsapp_account)
         return True
-    
+
     if step == "name":
         return _handle_step_task_name(message, from_number, whatsapp_account, context_data)
     elif step == "deadline":
         return _handle_step_deadline(message, from_number, whatsapp_account, context_data)
     elif step == "assignee":
         return _handle_step_assignee(message, from_number, whatsapp_account, context_data)
-    
+    elif step == "priority":
+        return _handle_step_priority(message, from_number, whatsapp_account, context_data)
+
     return False
 
 
@@ -481,9 +483,9 @@ def _handle_step_assignee(message, from_number, whatsapp_account, context_data=N
         send_interactive_message(from_number, message_text, buttons, whatsapp_account)
         return True
     
-    # Single match - finalize task
+    # Single match - ask priority
     assignee = matches[0]
-    return _finalize_guided_task(from_number, whatsapp_account, assignee["name"], assignee["full_name"] or assignee["email"])
+    return _ask_priority_step(from_number, whatsapp_account, assignee["name"], assignee["full_name"] or assignee["email"])
 
 
 def handle_guided_assignee_button(user_name, from_number, whatsapp_account):
@@ -504,7 +506,7 @@ def handle_guided_assignee_button(user_name, from_number, whatsapp_account):
         assignee = user_name
         assignee_display = user_doc["full_name"] or user_doc["email"]
     
-    _finalize_guided_task(from_number, whatsapp_account, assignee, assignee_display)
+    _ask_priority_step(from_number, whatsapp_account, assignee, assignee_display)
 
 
 def handle_guided_deadline_button(deadline_type, from_number, whatsapp_account):
@@ -519,28 +521,77 @@ def handle_guided_deadline_button(deadline_type, from_number, whatsapp_account):
     _handle_step_deadline(message, from_number, whatsapp_account)
 
 
-def _finalize_guided_task(from_number, whatsapp_account, assignee, assignee_display):
-    """Finalize the current guided task and show confirmation or add-another option"""
-    
+def _ask_priority_step(from_number, whatsapp_account, assignee, assignee_display):
+    """Optional step after assignee: ask for priority with 3 buttons"""
     context_data = get_context_data(from_number, "guided_flow")
     if not context_data:
         return False
-    
+
+    context_data["step"] = "priority"
+    context_data["current"]["assignee"] = assignee
+    context_data["current"]["assignee_display"] = assignee_display
+    set_context(from_number, "guided_flow", context_data)
+
+    current = context_data["current"]
+    deadline_display = format_date_display(getdate(current["deadline"])) if current.get("deadline") else "Not set"
+
+    buttons = [
+        {"id": "GUIDED_PRIORITY:High", "title": "🚩 High"},
+        {"id": "GUIDED_PRIORITY:Medium", "title": "🟡 Medium"},
+        {"id": "GUIDED_PRIORITY:Low", "title": "⬇️ Low"},
+    ]
+
+    msg = (
+        f"✅ Task: *{current['task_name']}*\n"
+        f"📅 Deadline: *{deadline_display}*\n"
+        f"👤 Assignee: *{assignee_display}*\n\n"
+        f"🚩 *Priority (Optional)*\n\n"
+        f"Select a priority or type anything to skip."
+    )
+
+    send_interactive_message(from_number, msg, buttons, whatsapp_account)
+    return True
+
+
+def _handle_step_priority(message, from_number, whatsapp_account, context_data):
+    """Handle text input at the priority step — any non-priority text skips it"""
+    text = message.strip().lower()
+    if text in {"high", "medium", "low"}:
+        context_data["current"]["priority"] = text.title()
+    else:
+        context_data["current"]["priority"] = ""
+    set_context(from_number, "guided_flow", context_data)
+    return _finalize_guided_task(from_number, whatsapp_account)
+
+
+def handle_guided_priority_button(priority, from_number, whatsapp_account):
+    """Handle GUIDED_PRIORITY:High/Medium/Low button press"""
+    context_data = get_context_data(from_number, "guided_flow")
+    if not context_data:
+        return
+    context_data["current"]["priority"] = priority
+    set_context(from_number, "guided_flow", context_data)
+    _finalize_guided_task(from_number, whatsapp_account)
+
+
+def _finalize_guided_task(from_number, whatsapp_account):
+    """Finalize the current guided task and show confirmation or add-another option"""
+    context_data = get_context_data(from_number, "guided_flow")
+    if not context_data:
+        return False
+
     current = context_data.get("current", {})
     tasks = context_data.get("tasks", [])
-    
-    # Add current task to list
+
     tasks.append({
         "task_name": current["task_name"],
         "deadline": current["deadline"],
-        "assignee": assignee,
-        "assignee_display": assignee_display
+        "assignee": current["assignee"],
+        "assignee_display": current["assignee_display"],
+        "priority": current.get("priority", "")
     })
-    
-    # Clear the guided flow context
+
     clear_context(from_number)
-    
-    # Show confirmation with "Add Another" option
     show_task_confirmation(tasks, from_number, whatsapp_account, show_add_another=True)
     return True
 

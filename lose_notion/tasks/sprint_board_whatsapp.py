@@ -41,7 +41,8 @@ from .handlers.creation_handlers import (
     handle_menu_add_task,
     handle_guided_flow_input,
     handle_guided_assignee_button,
-    handle_guided_deadline_button
+    handle_guided_deadline_button,
+    handle_guided_priority_button
 )
 from .handlers.confirmation_handlers import (
     handle_task_confirmation,
@@ -335,6 +336,11 @@ def _handle_button_message(message, from_number, whatsapp_account):
     if message.startswith("GUIDED_ASSIGNEE:"):
         user_name = message.replace("GUIDED_ASSIGNEE:", "").strip()
         handle_guided_assignee_button(user_name, from_number, whatsapp_account)
+        return
+
+    if message.startswith("GUIDED_PRIORITY:"):
+        priority = message.replace("GUIDED_PRIORITY:", "").strip()
+        handle_guided_priority_button(priority, from_number, whatsapp_account)
         return
     
     # Overdue review flow buttons
