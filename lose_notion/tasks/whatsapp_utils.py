@@ -75,6 +75,34 @@ def send_reply(to_number, message, whatsapp_account):
         frappe.log_error(f"Failed to send reply: {str(e)}", "Task Alert Error")
 
 
+def send_template_message(to_number, template, params, whatsapp_account):
+    """Send a WhatsApp template message.
+
+    Template messages work outside the 24-hour messaging window, unlike regular text messages.
+
+    Args:
+        to_number: Recipient phone number (with country code, no +)
+        template: WhatsApp Templates doctype name (e.g. "task_assigned_notification-en")
+        params: Dict of parameter values to fill in the template body (e.g. {"task_name": "...", ...})
+        whatsapp_account: WhatsApp Account doctype name
+    """
+    try:
+        wa_msg = frappe.get_doc({
+            "doctype": "WhatsApp Message",
+            "type": "Outgoing",
+            "to": to_number,
+            "message_type": "Template",
+            "template": template,
+            "content_type": "text",
+            "body_param": json.dumps(params),
+            "whatsapp_account": whatsapp_account,
+        })
+        wa_msg.insert(ignore_permissions=True)
+        frappe.db.commit()
+    except Exception as e:
+        frappe.log_error(f"Failed to send template message: {str(e)}", "Task Alert Error")
+
+
 def send_interactive_message(to_number, message_body, buttons, whatsapp_account):
     """Send an interactive message with buttons
     

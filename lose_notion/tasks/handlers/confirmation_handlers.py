@@ -5,7 +5,7 @@ import frappe
 from frappe.utils import getdate, now_datetime
 import json
 
-from ..whatsapp_utils import send_reply, send_interactive_message
+from ..whatsapp_utils import send_reply, send_interactive_message, send_template_message
 from ..date_utils import format_date_display, parse_date
 from ..user_utils import get_user_by_phone
 from ..context_storage import get_context_data, set_context, clear_context
@@ -449,8 +449,9 @@ def handle_ambiguous_users(task_info, from_number, whatsapp_account, confirmed_t
 
 
 def _notify_assignee(task, created_by, whatsapp_account):
-	"""Send a WhatsApp notification to the assignee when a task is assigned to them.
+	"""Send a WhatsApp template notification to the assignee when a task is assigned to them.
 
+	Uses a WhatsApp template message so it works even outside the 24-hour messaging window.
 	Skips silently if the assignee is the creator (self-assignment) or has no phone number.
 	"""
 	assignee = task["assignee"]
@@ -472,15 +473,16 @@ def _notify_assignee(task, created_by, whatsapp_account):
 			deadline = getdate(deadline)
 		deadline_display = format_date_display(deadline)
 
-		message = (
-			f"📋 *New Task Assigned to You*\n\n"
-			f"*{task['task_name']}*\n"
-			f"📅 Due: {deadline_display}\n"
-			f"👤 Assigned by: {creator_name}\n\n"
-			f"Reply *my tasks* to view all your tasks."
+		send_template_message(
+			to_number=mobile_no,
+			template="task_assigned_notification-",
+			params={
+				"task_name": task["task_name"],
+				"deadline": deadline_display,
+				"assigned_by": creator_name,
+			},
+			whatsapp_account=whatsapp_account,
 		)
-
-		send_reply(mobile_no, message, whatsapp_account)
 
 	except Exception as e:
 		frappe.log_error(
